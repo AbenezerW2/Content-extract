@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import requests
 
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -22,6 +25,12 @@ YOUTUBE_HOSTS = {
     "www.youtube-nocookie.com",
 }
 INVALID_FILENAME_CHARS_RE = re.compile(r'[\\/*?:"<>|\x00-\x1f]')
+
+
+def default_output_dir() -> Path:
+    """Return a predictable user-owned folder for saved transcripts."""
+    documents = Path.home() / "Documents"
+    return (documents if documents.is_dir() else Path.home()) / "YouTube Transcripts"
 
 
 def extract_video_id(value: str) -> str | None:
@@ -47,11 +56,13 @@ def extract_video_id(value: str) -> str | None:
     return candidate if candidate and VIDEO_ID_RE.fullmatch(candidate) else None
 
 
-def write_transcript_atomic(lines: list[str], output_file: Path) -> None:
+def write_transcript_atomic(
+    lines: list[str], output_file: Path, *, overwrite: bool = False
+) -> None:
     """Write a complete UTF-8 transcript without leaving a partial file."""
     output_file = output_file.expanduser()
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    if output_file.exists():
+    if output_file.exists() and not overwrite:
         raise FileExistsError(f"Output file already exists: {output_file}")
 
     temp_name: str | None = None
@@ -70,7 +81,7 @@ def write_transcript_atomic(lines: list[str], output_file: Path) -> None:
             temp_file.write("\n")
 
         # Refuse to replace a file created while the transcript was downloading.
-        if output_file.exists():
+        if output_file.exists() and not overwrite:
             raise FileExistsError(f"Output file already exists: {output_file}")
         os.replace(temp_name, output_file)
         temp_name = None
@@ -81,15 +92,91 @@ def write_transcript_atomic(lines: list[str], output_file: Path) -> None:
 
 def sanitize_filename(name: str) -> str:
     """Turn a user-provided label into a safe local text filename."""
-    clean_name = INVALID_FILENAME_CHARS_RE.sub("_", Path(name.strip()).name)
-    clean_name = clean_name.strip(" .") or "transcript"
+    clean_name = INVALID_FILENAME_CHARS_RE.sub("_", name.strip())
+    clean_name = clean_name.lstrip(" ._").rstrip(" .") or "transcript"
     return clean_name if clean_name.lower().endswith(".txt") else f"{clean_name}.txt"
 
 
-def build_api():
-    """Build an API client, optionally using proxy credentials from the environment."""
-    from youtube_transcript_api import YouTubeTranscriptApi
+def fetch_video_title(
+    video_id: str,
+    timeout: float = 10.0,
+    proxies: dict[str, str] | None = None,
+) -> str | None:
+    """Retrieve a public video's title through YouTube's oEmbed endpoint.
 
+    Routed through the same proxy as the transcript API (when one is
+    configured) so this request doesn't hit YouTube from an IP that's
+    already being blocked, which was silently failing every lookup.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    if proxies:
+        # Mirrors the transcript API's own handling for rotating proxies:
+        # close the connection so the next request can land on a different IP.
+        headers["Connection"] = "close"
+
+    try:
+        response = requests.get(
+            "https://www.youtube.com/oembed",
+            params={
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "format": "json",
+            },
+            headers=headers,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (requests.RequestException, ValueError, json.JSONDecodeError) as error:
+        print(
+            f"Warning: could not retrieve the video title "
+            f"({type(error).__name__}: {error}). Using a numbered filename instead.",
+            file=sys.stderr,
+        )
+        return None
+
+    title = data.get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
+def unique_path(path: Path) -> Path:
+    """Return path or a numbered variant that does not already exist."""
+    if not path.exists():
+        return path
+    counter = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}_{counter}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def choose_existing_file_action(path: Path) -> tuple[Path | None, bool]:
+    """Ask whether to keep both files, overwrite, or cancel."""
+    if not path.exists():
+        return path, False
+
+    while True:
+        choice = input(
+            f"'{path.name}' already exists. "
+            "[K]eep both, [O]verwrite, or [C]ancel: "
+        ).strip().lower()
+        if choice in {"", "k", "keep", "keep both"}:
+            return unique_path(path), False
+        if choice in {"o", "overwrite"}:
+            return path, True
+        if choice in {"c", "cancel"}:
+            return None, False
+        print("Please enter K, O, or C.")
+
+
+def build_proxy_config():
+    """Build a WebshareProxyConfig from the environment, or None if unset."""
     username = os.environ.get("WEBSHARE_PROXY_USERNAME")
     password = os.environ.get("WEBSHARE_PROXY_PASSWORD")
     if bool(username) != bool(password):
@@ -99,13 +186,17 @@ def build_api():
     if username and password:
         from youtube_transcript_api.proxies import WebshareProxyConfig
 
-        return YouTubeTranscriptApi(
-            proxy_config=WebshareProxyConfig(
-                proxy_username=username,
-                proxy_password=password,
-            )
-        )
-    return YouTubeTranscriptApi()
+        return WebshareProxyConfig(proxy_username=username, proxy_password=password)
+    return None
+
+
+def build_api(proxy_config=None):
+    """Build an API client, using proxy_config if given, else reading one from the environment."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    if proxy_config is None:
+        proxy_config = build_proxy_config()
+    return YouTubeTranscriptApi(proxy_config=proxy_config)
 
 
 def fetch_best_transcript(
@@ -152,6 +243,7 @@ def get_youtube_transcript(
     translate_to: str | None = None,
     allow_any_language: bool = True,
     api=None,
+    overwrite: bool = False,
 ) -> bool:
     """Fetch captions and save them. Return True only after a successful save."""
     video_id = extract_video_id(video_url)
@@ -192,7 +284,7 @@ def get_youtube_transcript(
             print("Error: YouTube returned an empty transcript.", file=sys.stderr)
             return False
 
-        write_transcript_atomic(lines, Path(output_file))
+        write_transcript_atomic(lines, Path(output_file), overwrite=overwrite)
     except TranscriptsDisabled:
         print("Error: captions are disabled for this video.", file=sys.stderr)
     except NoTranscriptFound:
@@ -241,11 +333,13 @@ def interactive_mode(
 ) -> int:
     """Prompt for videos until the user enters 'stop'."""
     try:
-        api = build_api()
+        proxy_config = build_proxy_config()
+        api = build_api(proxy_config)
         output_dir.mkdir(parents=True, exist_ok=True)
     except (OSError, ValueError) as error:
         print(f"Error configuring the transcript tool: {error}", file=sys.stderr)
         return 1
+    proxies = proxy_config.to_requests_dict() if proxy_config else None
 
     print(f"Transcripts will be saved in: {output_dir.resolve()}")
     while True:
@@ -261,12 +355,28 @@ def interactive_mode(
         if not value:
             continue
 
-        label = input("Filename (press Enter for the next day number): ").strip()
-        output_file = (
-            output_dir / sanitize_filename(label)
-            if label
+        video_id = extract_video_id(value)
+        if not video_id:
+            print("Error: enter a valid YouTube URL or 11-character video ID.")
+            continue
+
+        print("Looking up the video title...")
+        title = fetch_video_title(video_id, proxies=proxies)
+        suggested_file = (
+            output_dir / sanitize_filename(title)
+            if title
             else next_day_file(output_dir)
         )
+        label = input(
+            f"Filename [{suggested_file.name}] "
+            "(press Enter to use it, or type another name): "
+        ).strip()
+        output_file = output_dir / sanitize_filename(label) if label else suggested_file
+        output_file, overwrite = choose_existing_file_action(output_file)
+        if output_file is None:
+            print("Cancelled; no transcript was downloaded.")
+            continue
+
         get_youtube_transcript(
             value,
             output_file,
@@ -274,6 +384,7 @@ def interactive_mode(
             translate_to=translate_to,
             allow_any_language=allow_any_language,
             api=api,
+            overwrite=overwrite,
         )
 
 
@@ -282,10 +393,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("video", nargs="?", help="YouTube URL or video ID")
     parser.add_argument("-o", "--output", type=Path, help="output text file")
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace an existing output file (non-interactive mode only)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("transcripts"),
-        help="interactive/default output directory (default: ./transcripts)",
+        default=default_output_dir(),
+        help="interactive/default output directory (default: ~/Documents/YouTube Transcripts)",
     )
     parser.add_argument(
         "-l",
@@ -319,7 +435,23 @@ def main() -> int:
             not args.strict_language,
         )
 
-    output_file = args.output or next_day_file(args.output_dir)
+    try:
+        proxy_config = build_proxy_config()
+    except ValueError as error:
+        print(f"Error configuring the transcript tool: {error}", file=sys.stderr)
+        return 1
+    proxies = proxy_config.to_requests_dict() if proxy_config else None
+
+    if args.output:
+        output_file = args.output
+    else:
+        video_id = extract_video_id(args.video)
+        title = fetch_video_title(video_id, proxies=proxies) if video_id else None
+        output_file = (
+            args.output_dir / sanitize_filename(title)
+            if title
+            else next_day_file(args.output_dir)
+        )
     return (
         0
         if get_youtube_transcript(
@@ -328,6 +460,8 @@ def main() -> int:
             languages,
             translate_to=args.translate,
             allow_any_language=not args.strict_language,
+            api=build_api(proxy_config),
+            overwrite=args.overwrite,
         )
         else 1
     )

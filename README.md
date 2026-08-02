@@ -31,6 +31,14 @@ Start interactive mode:
 python youtube_transcript_extractor.py
 ```
 
+By default, downloaded transcripts are saved in
+`~/Documents/YouTube Transcripts`, regardless of the Terminal's current folder.
+Use `--output-dir` to select a different location.
+
+In interactive mode, the video's YouTube title is suggested as the filename.
+Press Enter to accept it or type a different name. If the file already exists,
+choose whether to keep both copies, overwrite the existing file, or cancel.
+
 Download one video's captions:
 
 ```bash
@@ -41,6 +49,12 @@ Choose an output file:
 
 ```bash
 python youtube_transcript_extractor.py "YOUTUBE_URL" --output transcript.txt
+```
+
+Replacing an existing output file is intentionally explicit:
+
+```bash
+python youtube_transcript_extractor.py "YOUTUBE_URL" --output transcript.txt --overwrite
 ```
 
 Set preferred languages in priority order:
