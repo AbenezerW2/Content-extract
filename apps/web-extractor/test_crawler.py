@@ -5,12 +5,15 @@ from crawler import (
     CrawlerError,
     Page,
     chapter_urls,
+    crawl_site,
     extract,
     looks_like_verification_page,
     named_output_path,
     render_markdown,
     render_text,
     robots_allows,
+    same_site_links,
+    suggested_page_name,
     validate_public_url,
 )
 
@@ -129,6 +132,40 @@ class ExtractTests(unittest.TestCase):
     def test_rejects_invalid_chapter_range(self):
         with self.assertRaises(CrawlerError):
             chapter_urls("https://books.example/book/", 5, 2)
+
+    def test_suggests_title_and_falls_back_to_url(self):
+        self.assertEqual(suggested_page_name({"title": " Demo page "}), "Demo page")
+        self.assertEqual(
+            suggested_page_name({"final_url": "https://example.com/course/lesson-one"}),
+            "lesson one",
+        )
+
+    def test_same_site_links_exclude_external_and_binary_urls(self):
+        data = {
+            "links": [
+                {"url": "https://example.com/about#team"},
+                {"url": "https://example.com/report.pdf"},
+                {"url": "https://other.example/page"},
+            ]
+        }
+        self.assertEqual(
+            same_site_links(data, "https://example.com/start"),
+            ["https://example.com/about"],
+        )
+
+    def test_site_crawl_is_breadth_first_and_bounded(self):
+        pages = {
+            "https://example.com": "<title>Home</title><a href='/a'>A</a><a href='/b'>B</a>",
+            "https://example.com/a": "<title>A</title>",
+            "https://example.com/b": "<title>B</title>",
+        }
+
+        def fetcher(url):
+            return Page(url, url, 200, "text/html", pages[url])
+
+        results = list(crawl_site("https://example.com", 2, fetcher))
+
+        self.assertEqual([result["title"] for result in results], ["Home", "A"])
 
 
 if __name__ == "__main__":

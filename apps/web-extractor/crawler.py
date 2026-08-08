@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Safe, single-page web extractor with an optional Playwright renderer."""
+"""Safe web extractor with single-page, chapter, and same-site workflows."""
 
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import ipaddress
 import json
 import re
@@ -12,8 +13,8 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
-from urllib.parse import urljoin, urlparse
+from typing import Any, Callable, Iterator
+from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
@@ -22,6 +23,36 @@ from bs4 import BeautifulSoup
 
 USER_AGENT = "SimplePageExtractor/1.0 (+local educational tool)"
 MAX_REDIRECTS = 5
+MAX_SITE_PAGES = 30
+SKIPPED_LINK_EXTENSIONS = {
+    ".7z",
+    ".avi",
+    ".css",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".gz",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".m4a",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".pdf",
+    ".png",
+    ".ppt",
+    ".pptx",
+    ".rar",
+    ".svg",
+    ".tar",
+    ".webm",
+    ".webp",
+    ".xls",
+    ".xlsx",
+    ".zip",
+}
 
 
 class CrawlerError(RuntimeError):
@@ -318,6 +349,75 @@ def render_output(data: dict[str, Any], output_format: str) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
+def suggested_page_name(data: dict[str, Any]) -> str:
+    """Return a useful automatic output name from extracted page metadata."""
+    title = clean_text(str(data.get("title") or ""))
+    if title:
+        return title
+    parsed = urlparse(str(data.get("final_url") or data.get("requested_url") or ""))
+    path_name = Path(parsed.path.rstrip("/")).stem
+    return clean_text(path_name.replace("-", " ").replace("_", " ")) or parsed.hostname or "Web page"
+
+
+def same_site_links(data: dict[str, Any], site_url: str) -> list[str]:
+    """Return unique, crawlable HTTP links that stay on the starting origin."""
+    site = urlparse(site_url)
+    origin = (site.scheme.lower(), site.netloc.lower())
+    links: list[str] = []
+    seen: set[str] = set()
+    for item in data.get("links", []):
+        raw_url = item.get("url") if isinstance(item, dict) else None
+        if not isinstance(raw_url, str):
+            continue
+        url = urldefrag(raw_url)[0]
+        parsed = urlparse(url)
+        if (parsed.scheme.lower(), parsed.netloc.lower()) != origin:
+            continue
+        if Path(parsed.path).suffix.lower() in SKIPPED_LINK_EXTENSIONS:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        links.append(url)
+    return links
+
+
+def crawl_site(
+    start_url: str,
+    max_pages: int,
+    fetcher: Callable[[str], Page],
+    delay: float = 0,
+) -> Iterator[dict[str, Any]]:
+    """Breadth-first crawl of same-origin pages, bounded to at most 30 outputs."""
+    if not 1 <= max_pages <= MAX_SITE_PAGES:
+        raise CrawlerError(f"Site crawl limit must be between 1 and {MAX_SITE_PAGES}")
+    start_url = urldefrag(start_url)[0]
+    queue = deque([start_url])
+    attempted: set[str] = set()
+    completed = 0
+    while queue and completed < max_pages:
+        url = queue.popleft()
+        if url in attempted:
+            continue
+        attempted.add(url)
+        try:
+            data = extract(fetcher(url))
+        except (CrawlerError, OSError, requests.RequestException) as exc:
+            if not completed:
+                raise
+            print(f"warning: skipped {url}: {exc}", file=sys.stderr)
+            continue
+        yield data
+        completed += 1
+        queued = set(queue)
+        for link in same_site_links(data, start_url):
+            if link not in attempted and link not in queued:
+                queue.append(link)
+                queued.add(link)
+        if delay and queue and completed < max_pages:
+            time.sleep(delay)
+
+
 def chapter_urls(book_url: str, start: int, end: int) -> list[str]:
     if start < 1 or end < start:
         raise CrawlerError("Chapter range must start at 1 or later and end at or after the start")
@@ -393,10 +493,17 @@ def save_named_output(
     output_dir: str,
     output_format: str,
     overwrite: bool,
+    keep_both: bool = False,
 ) -> Path:
     output_path = named_output_path(name, output_dir, output_format)
     if output_path.exists() and not overwrite:
-        raise CrawlerError(f"Output already exists: {output_path} (use --overwrite to replace it)")
+        if not keep_both:
+            raise CrawlerError(f"Output already exists: {output_path} (use --overwrite to replace it)")
+        counter = 2
+        while output_path.exists():
+            base_name = f"{name} {counter}"
+            output_path = named_output_path(base_name, output_dir, output_format)
+            counter += 1
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_output(data, output_format), encoding="utf-8")
     return output_path
@@ -408,6 +515,11 @@ def main() -> int:
     destination = parser.add_mutually_exclusive_group()
     destination.add_argument("-o", "--output", help="Write the selected format to this exact file path")
     destination.add_argument("-n", "--name", help="Name this study output; saves it in --output-dir")
+    parser.add_argument(
+        "--auto-name",
+        action="store_true",
+        help="Use the extracted page title as the output name",
+    )
     parser.add_argument(
         "--format",
         choices=("json", "markdown", "text"),
@@ -433,6 +545,17 @@ def main() -> int:
         help="Extract chapter URLs from --start-chapter through END in one browser session",
     )
     parser.add_argument("--start-chapter", type=int, default=1, help="First chapter in batch mode (default: 1)")
+    parser.add_argument(
+        "--crawl-site",
+        action="store_true",
+        help="Follow same-origin page links and save each extracted page",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=MAX_SITE_PAGES,
+        help=f"Maximum pages for --crawl-site (1–{MAX_SITE_PAGES}; default: {MAX_SITE_PAGES})",
+    )
     args = parser.parse_args()
     if args.timeout <= 0 or args.max_bytes <= 0 or args.delay < 0:
         parser.error("timeout and max-bytes must be positive; delay cannot be negative")
@@ -444,8 +567,50 @@ def main() -> int:
         parser.error("--batch-chapters requires --playwright")
     if args.batch_chapters is not None and args.output:
         parser.error("--output cannot represent multiple files; use --name and/or --output-dir in batch mode")
+    if args.crawl_site and args.batch_chapters is not None:
+        parser.error("--crawl-site and --batch-chapters are separate workflows")
+    if args.crawl_site and args.output:
+        parser.error("--output cannot represent multiple files; use --output-dir in site mode")
+    if not 1 <= args.max_pages <= MAX_SITE_PAGES:
+        parser.error(f"--max-pages must be between 1 and {MAX_SITE_PAGES}")
+    if args.auto_name and args.name:
+        parser.error("--auto-name cannot be combined with --name")
 
     try:
+        if args.crawl_site:
+            first_site_page = True
+
+            def fetcher(url: str) -> Page:
+                nonlocal first_site_page
+                if args.playwright:
+                    page = fetch_playwright(
+                        url,
+                        args.timeout,
+                        args.max_bytes,
+                        args.headed,
+                        args.wait_for_user and first_site_page,
+                    )
+                else:
+                    page = fetch_requests(url, args.timeout, args.max_bytes)
+                first_site_page = False
+                return page
+
+            completed = 0
+            for data in crawl_site(args.url, args.max_pages, fetcher, args.delay):
+                automatic_name = suggested_page_name(data)
+                output_name = f"{args.name} - {automatic_name}" if args.name else automatic_name
+                path = save_named_output(
+                    data,
+                    output_name,
+                    args.output_dir,
+                    args.format,
+                    args.overwrite,
+                    keep_both=not args.overwrite,
+                )
+                print(f"saved: {path.resolve()}")
+                completed += 1
+            print(f"completed: {completed} site pages")
+            return 0
         if args.batch_chapters is not None:
             urls = chapter_urls(args.url, args.start_chapter, args.batch_chapters)
             pages = fetch_playwright_batch(
@@ -473,10 +638,21 @@ def main() -> int:
             page = fetch_requests(args.url, args.timeout, args.max_bytes)
         data = extract(page)
         result = render_output(data, args.format)
-        output_path = named_output_path(args.name, args.output_dir, args.format) if args.name else Path(args.output).expanduser() if args.output else None
+        output_name = args.name or (suggested_page_name(data) if args.auto_name else None)
+        output_path = named_output_path(output_name, args.output_dir, args.format) if output_name else Path(args.output).expanduser() if args.output else None
         if output_path:
-            if args.name and output_path.exists() and not args.overwrite:
-                raise CrawlerError(f"Output already exists: {output_path} (use --overwrite to replace it)")
+            if output_path.exists() and not args.overwrite:
+                if args.auto_name:
+                    counter = 2
+                    while output_path.exists():
+                        output_path = named_output_path(
+                            f"{output_name} {counter}", args.output_dir, args.format
+                        )
+                        counter += 1
+                else:
+                    raise CrawlerError(
+                        f"Output already exists: {output_path} (use --overwrite to replace it)"
+                    )
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with output_path.open("w", encoding="utf-8") as handle:
                 handle.write(result)

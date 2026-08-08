@@ -1,12 +1,13 @@
 # YouTube Extractor
 
 A small Python command-line tool that downloads available YouTube captions and
-saves them as clean UTF-8 text files.
+saves them as clean UTF-8 text, Markdown, or JSON files.
 
 It supports standard YouTube links, short links, Shorts, Live links, embed
 links, and bare video IDs. It can prioritize preferred caption languages,
 fall back to another available language, optionally translate captions, and
-report whether the selected captions are manual or automatically generated.
+report whether the selected captions are manual or automatically generated. It
+can also process playlists with a maximum of 30 videos per run.
 
 ## Requirements
 
@@ -31,7 +32,8 @@ Start interactive mode:
 python youtube_transcript_extractor.py
 ```
 
-By default, downloaded transcripts are saved in
+By default, downloaded transcripts use the video's YouTube title as the safe
+filename and are saved in
 `~/Documents/YouTube Transcripts`, regardless of the Terminal's current folder.
 Use `--output-dir` to select a different location.
 
@@ -43,6 +45,18 @@ Download one video's captions:
 
 ```bash
 python youtube_transcript_extractor.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+Override the detected title and choose the output format:
+
+```bash
+python youtube_transcript_extractor.py "YOUTUBE_URL" --name "Lecture 1" --format markdown
+```
+
+Extract a playlist, capped at 30 videos:
+
+```bash
+python youtube_transcript_extractor.py "PLAYLIST_URL" --playlist --max-videos 30 --format json
 ```
 
 Choose an output file:
@@ -97,6 +111,8 @@ Never commit proxy credentials to the repository.
 
 - The tool downloads captions that already exist on YouTube; it does not
   transcribe audio when a video has no captions.
+- Playlist extraction requires `yt-dlp` for playlist metadata; video files are
+  not downloaded.
 - Private, unavailable, region-restricted, or age-restricted videos may not be
   accessible.
 - YouTube can temporarily block high-volume requests.

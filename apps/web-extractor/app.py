@@ -17,6 +17,7 @@ from app_model import (
     build_crawler_command,
     build_youtube_command,
 )
+from history_store import HistoryStore
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -24,6 +25,7 @@ WORKSPACE_DIR = Path(os.environ.get("CONTENT_EXTRACT_ROOT", APP_DIR)).resolve()
 CRAWLER_PATH = APP_DIR / "crawler.py"
 YOUTUBE_EXTRACTOR_PATH = APP_DIR.parent / "youtube-extractor" / "youtube_transcript_extractor.py"
 FRONTEND_INDEX = APP_DIR / "frontend" / "dist" / "index.html"
+HISTORY_PATH = WORKSPACE_DIR / ".content-extract" / "history.json"
 
 
 class DesktopBridge:
@@ -33,6 +35,7 @@ class DesktopBridge:
         self.events: list[dict[str, Any]] = []
         self.exit_code: int | None = None
         self.lock = threading.Lock()
+        self.history = HistoryStore(HISTORY_PATH)
 
     def attach_window(self, window: webview.Window) -> None:
         self.window = window
@@ -58,8 +61,9 @@ class DesktopBridge:
         if self.process and self.process.poll() is None:
             return {"ok": False, "error": "An extraction is already running."}
 
+        mode = str(payload.get("mode", "page"))
         try:
-            if payload.get("mode") == "youtube":
+            if mode == "youtube":
                 options = self._youtube_options_from_payload(payload)
                 command = build_youtube_command(options, sys.executable, YOUTUBE_EXTRACTOR_PATH)
             else:
@@ -82,25 +86,35 @@ class DesktopBridge:
                 bufsize=1,
             )
         except OSError as exc:
-            return {"ok": False, "error": f"Could not start the crawler: {exc}"}
+            return {"ok": False, "error": f"Could not start the extractor: {exc}"}
+
+        job = {
+            "mode": mode,
+            "source": str(payload.get("url", "")),
+            "label": str(payload.get("name", "")),
+        }
 
         with self.lock:
             self.events = []
             self.exit_code = None
             self.process = process
-        threading.Thread(target=self._read_process, args=(process,), daemon=True).start()
+        threading.Thread(target=self._read_process, args=(process, job), daemon=True).start()
         return {"ok": True}
 
-    def _read_process(self, process: subprocess.Popen[str]) -> None:
+    def _read_process(self, process: subprocess.Popen[str], job: dict[str, str]) -> None:
         assert process.stdout is not None
         try:
             for line in iter(process.stdout.readline, ""):
                 self._append_event("output", text=line)
                 lowered = line.lower()
                 if lowered.startswith("saved:"):
-                    self._append_event("saved", path=line.split(":", 1)[1].strip())
+                    path = line.split(":", 1)[1].strip()
+                    self._append_event("saved", path=path)
+                    self.history.record(path=path, **job)
                 elif lowered.startswith("transcript saved to '"):
-                    self._append_event("saved", path=line.split("'", 2)[1])
+                    path = line.split("'", 2)[1]
+                    self._append_event("saved", path=path)
+                    self.history.record(path=path, **job)
                 if "complete any verification" in lowered:
                     self._append_event("verification")
         finally:
@@ -124,6 +138,9 @@ class DesktopBridge:
             "running": running,
             "exitCode": exit_code,
         }
+
+    def get_history(self, mode: str) -> list[dict[str, Any]]:
+        return self.history.list(str(mode))
 
     def send_verification(self) -> dict[str, Any]:
         with self.lock:
@@ -175,6 +192,7 @@ class DesktopBridge:
     @staticmethod
     def _options_from_payload(payload: dict[str, Any]) -> ExtractionOptions:
         whole_book = payload.get("mode") == "book"
+        crawl_site = payload.get("mode") == "site"
         return ExtractionOptions(
             url=str(payload.get("url", "")),
             name=str(payload.get("name", "")),
@@ -188,6 +206,8 @@ class DesktopBridge:
             wait_for_user=bool(payload.get("wait_for_user", False)),
             delay=float(payload.get("delay", 0)),
             overwrite=bool(payload.get("overwrite", False)),
+            crawl_site=crawl_site,
+            max_pages=int(payload.get("max_pages", 30)),
         ).validated()
 
     @staticmethod
@@ -205,6 +225,9 @@ class DesktopBridge:
             translate_to=str(payload.get("translate_to", "")),
             strict_language=bool(payload.get("strict_language", False)),
             overwrite=bool(payload.get("overwrite", False)),
+            output_format=str(payload.get("output_format", "text")),
+            playlist=bool(payload.get("playlist", False)),
+            max_videos=int(payload.get("max_videos", 30)),
         ).validated()
 
 

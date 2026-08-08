@@ -81,14 +81,52 @@ class AppModelTests(unittest.TestCase):
             languages=("am", "en"),
             translate_to="en",
             strict_language=True,
+            output_format="markdown",
         )
 
         command = build_youtube_command(options, "python", "youtube_extractor.py")
 
         self.assertEqual(command[:3], ["python", "youtube_extractor.py", options.url])
-        self.assertEqual(command[command.index("--output") + 1], "outputs/youtube/Lesson 1.txt")
+        self.assertEqual(command[command.index("--output-dir") + 1], "outputs/youtube")
+        self.assertEqual(command[command.index("--name") + 1], "Lesson 1")
+        self.assertEqual(command[command.index("--format") + 1], "markdown")
         self.assertEqual(command.count("--language"), 2)
         self.assertIn("--strict-language", command)
+
+    def test_youtube_uses_detected_title_and_playlist_limit(self):
+        options = YouTubeExtractionOptions(
+            url="https://youtube.com/playlist?list=demo",
+            name="",
+            output_dir="outputs/youtube",
+            playlist=True,
+            max_videos=12,
+        )
+
+        command = build_youtube_command(options, "python", "youtube_extractor.py")
+
+        self.assertNotIn("--name", command)
+        self.assertEqual(command[command.index("--max-videos") + 1], "12")
+        self.assertEqual(options.expected_outputs, 12)
+
+    def test_builds_bounded_site_crawl_command_with_auto_names(self):
+        options = ExtractionOptions(
+            url="https://example.com",
+            name="",
+            output_dir="outputs/sites",
+            whole_book=False,
+            playwright=False,
+            headed=False,
+            wait_for_user=False,
+            crawl_site=True,
+            max_pages=20,
+        )
+
+        command = build_crawler_command(options, "python", "crawler.py")
+
+        self.assertIn("--auto-name", command)
+        self.assertIn("--crawl-site", command)
+        self.assertEqual(command[command.index("--max-pages") + 1], "20")
+        self.assertEqual(options.expected_outputs, 20)
 
     def test_youtube_name_rejects_folder_separator(self):
         with self.assertRaises(AppValidationError):

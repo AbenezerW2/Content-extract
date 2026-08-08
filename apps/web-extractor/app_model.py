@@ -27,6 +27,8 @@ class ExtractionOptions:
     wait_for_user: bool = True
     delay: float = 1
     overwrite: bool = False
+    crawl_site: bool = False
+    max_pages: int = 30
 
     def validated(self) -> "ExtractionOptions":
         url = self.url.strip()
@@ -36,7 +38,7 @@ class ExtractionOptions:
 
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise AppValidationError("Enter a complete public http:// or https:// URL.")
-        if not name:
+        if self.whole_book and not name:
             raise AppValidationError("Enter a book name or output name.")
         if not output_dir:
             raise AppValidationError("Choose an output folder.")
@@ -44,6 +46,8 @@ class ExtractionOptions:
             raise AppValidationError("Choose Markdown, JSON, or text output.")
         if self.delay < 0:
             raise AppValidationError("Delay cannot be negative.")
+        if self.crawl_site and not 1 <= self.max_pages <= 30:
+            raise AppValidationError("Whole-site extraction must be limited to 1–30 pages.")
         if self.wait_for_user and not (self.playwright and self.headed):
             raise AppValidationError("Manual verification requires Playwright and a visible browser.")
         if self.headed and not self.playwright:
@@ -67,12 +71,16 @@ class ExtractionOptions:
             wait_for_user=self.wait_for_user,
             delay=self.delay,
             overwrite=self.overwrite,
+            crawl_site=self.crawl_site,
+            max_pages=self.max_pages,
         )
 
     @property
     def expected_outputs(self) -> int:
         if self.whole_book:
             return self.end_chapter - self.start_chapter + 1
+        if self.crawl_site:
+            return self.max_pages
         return 1
 
 
@@ -85,6 +93,9 @@ class YouTubeExtractionOptions:
     translate_to: str = ""
     strict_language: bool = False
     overwrite: bool = False
+    output_format: str = "text"
+    playlist: bool = False
+    max_videos: int = 30
 
     def validated(self) -> "YouTubeExtractionOptions":
         url = self.url.strip()
@@ -94,14 +105,16 @@ class YouTubeExtractionOptions:
 
         if not url:
             raise AppValidationError("Enter a YouTube URL or video ID.")
-        if not name:
-            raise AppValidationError("Enter a transcript name.")
-        if Path(name).name != name or name in {".", ".."}:
+        if name and (Path(name).name != name or name in {".", ".."}):
             raise AppValidationError("Transcript name cannot contain folder separators.")
         if not output_dir:
             raise AppValidationError("Choose an output folder.")
         if not languages:
             raise AppValidationError("Enter at least one preferred caption language.")
+        if self.output_format not in OUTPUT_FORMATS:
+            raise AppValidationError("Choose Markdown, JSON, or text output.")
+        if self.playlist and not 1 <= self.max_videos <= 30:
+            raise AppValidationError("Playlist extraction must be limited to 1–30 videos.")
 
         return YouTubeExtractionOptions(
             url=url,
@@ -111,16 +124,14 @@ class YouTubeExtractionOptions:
             translate_to=self.translate_to.strip(),
             strict_language=self.strict_language,
             overwrite=self.overwrite,
+            output_format=self.output_format,
+            playlist=self.playlist,
+            max_videos=self.max_videos,
         )
 
     @property
-    def output_path(self) -> Path:
-        name = self.name if self.name.lower().endswith(".txt") else f"{self.name}.txt"
-        return Path(self.output_dir).expanduser() / name
-
-    @property
     def expected_outputs(self) -> int:
-        return 1
+        return self.max_videos if self.playlist else 1
 
 
 def build_crawler_command(
@@ -148,8 +159,12 @@ def build_crawler_command(
                 f"{options.name} - Chapter",
             ]
         )
-    else:
+    elif options.name:
         command.extend(["--name", options.name])
+    else:
+        command.append("--auto-name")
+    if options.crawl_site:
+        command.extend(["--crawl-site", "--max-pages", str(options.max_pages)])
 
     command.extend(
         [
@@ -176,9 +191,15 @@ def build_youtube_command(
         python_executable,
         str(extractor_path),
         options.url,
-        "--output",
-        str(options.output_path),
+        "--output-dir",
+        options.output_dir,
+        "--format",
+        options.output_format,
     ]
+    if options.name:
+        command.extend(["--name", options.name])
+    if options.playlist:
+        command.extend(["--playlist", "--max-videos", str(options.max_videos)])
     for language in options.languages:
         command.extend(["--language", language])
     if options.translate_to:
