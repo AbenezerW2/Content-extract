@@ -1,0 +1,2 @@
+-r requirements-playwright.txt
+pywebview>=6.1,<7
