@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+**/outputs/
+apps/web-extractor/frontend/node_modules/
+apps/web-extractor/frontend/dist/

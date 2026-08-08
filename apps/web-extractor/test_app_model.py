@@ -1,6 +1,12 @@
 import unittest
 
-from app_model import AppValidationError, ExtractionOptions, build_crawler_command
+from app_model import (
+    AppValidationError,
+    ExtractionOptions,
+    YouTubeExtractionOptions,
+    build_crawler_command,
+    build_youtube_command,
+)
 
 
 class AppModelTests(unittest.TestCase):
@@ -65,6 +71,31 @@ class AppModelTests(unittest.TestCase):
                 playwright=True,
                 headed=False,
                 wait_for_user=True,
+            ).validated()
+
+    def test_builds_youtube_transcript_command(self):
+        options = YouTubeExtractionOptions(
+            url="https://youtu.be/dQw4w9WgXcQ",
+            name="Lesson 1",
+            output_dir="outputs/youtube",
+            languages=("am", "en"),
+            translate_to="en",
+            strict_language=True,
+        )
+
+        command = build_youtube_command(options, "python", "youtube_extractor.py")
+
+        self.assertEqual(command[:3], ["python", "youtube_extractor.py", options.url])
+        self.assertEqual(command[command.index("--output") + 1], "outputs/youtube/Lesson 1.txt")
+        self.assertEqual(command.count("--language"), 2)
+        self.assertIn("--strict-language", command)
+
+    def test_youtube_name_rejects_folder_separator(self):
+        with self.assertRaises(AppValidationError):
+            YouTubeExtractionOptions(
+                url="dQw4w9WgXcQ",
+                name="course/lesson",
+                output_dir="outputs/youtube",
             ).validated()
 
 

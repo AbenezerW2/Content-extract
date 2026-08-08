@@ -53,6 +53,22 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(status["events"], [{"type": "saved", "path": "output.md"}])
         self.assertFalse(status["running"])
 
+    def test_builds_youtube_options_from_frontend_payload(self):
+        options = DesktopBridge._youtube_options_from_payload(
+            {
+                "mode": "youtube",
+                "url": "https://youtu.be/dQw4w9WgXcQ",
+                "name": "Course intro",
+                "output_dir": "outputs/youtube",
+                "languages": "am, en",
+                "strict_language": True,
+            }
+        )
+
+        self.assertEqual(options.languages, ("am", "en"))
+        self.assertEqual(options.output_path.as_posix(), "outputs/youtube/Course intro.txt")
+        self.assertTrue(options.strict_language)
+
 
 if __name__ == "__main__":
     unittest.main()

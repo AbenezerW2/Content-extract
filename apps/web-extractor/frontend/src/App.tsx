@@ -15,9 +15,10 @@ import {
   ScrollText,
   Sparkles,
   Sun,
+  Youtube,
   X,
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import {
@@ -31,7 +32,7 @@ import {
 } from "@/components/ui/morphing-dialog"
 import { cn } from "@/lib/utils"
 
-type Mode = "page" | "book"
+type Mode = "page" | "book" | "youtube"
 type Theme = "light" | "dark" | "system"
 type OutputFormat = "markdown" | "json" | "text"
 
@@ -48,6 +49,9 @@ type ExtractionForm = {
   headed: boolean
   waitForUser: boolean
   overwrite: boolean
+  languages: string
+  translateTo: string
+  strictLanguage: boolean
 }
 
 type BridgeEvent = {
@@ -92,6 +96,9 @@ const initialForm: ExtractionForm = {
   headed: true,
   waitForUser: true,
   overwrite: false,
+  languages: "en, en-US, en-GB",
+  translateTo: "",
+  strictLanguage: false,
 }
 
 const spring = { type: "spring" as const, stiffness: 420, damping: 34 }
@@ -103,7 +110,7 @@ function getEffectiveTheme(theme: Theme) {
 
 function App() {
   const [form, setForm] = useState<ExtractionForm>(initialForm)
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("pagebound-theme") as Theme) || "system")
+  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("content-extract-theme") as Theme) || "system")
   const [effectiveTheme, setEffectiveTheme] = useState<"light" | "dark">(() => getEffectiveTheme(theme))
   const [running, setRunning] = useState(false)
   const [verificationNeeded, setVerificationNeeded] = useState(false)
@@ -116,8 +123,34 @@ function App() {
   const expectedOutputs = form.mode === "book" ? Math.max(1, form.endChapter - form.startChapter + 1) : 1
   const progress = running || savedCount ? Math.min(100, Math.round((savedCount / expectedOutputs) * 100)) : 0
 
+  const consumeEvents = useCallback((events: BridgeEvent[]) => {
+    for (const event of events) {
+      if (event.type === "output" && event.text) setLogs((current) => [...current, event.text!])
+      if (event.type === "saved") {
+        setSavedCount((count) => count + 1)
+        setStatus(form.mode === "book" ? "Extracting chapters" : form.mode === "youtube" ? "Saving transcript" : "Saving page")
+      }
+      if (event.type === "verification") {
+        setVerificationNeeded(true)
+        setStatus("Waiting for browser verification")
+      }
+      if (event.type === "finished") {
+        setRunning(false)
+        setVerificationNeeded(false)
+        if (event.exitCode === 0) {
+          setSavedCount(expectedOutputs)
+          setStatus("Extraction complete")
+        } else {
+          setStatus("Extraction stopped")
+          setError("The extractor did not finish. Open activity for details.")
+        }
+      }
+      if (event.type === "error") setError(event.text || "Something went wrong.")
+    }
+  }, [expectedOutputs, form.mode])
+
   useEffect(() => {
-    localStorage.setItem("pagebound-theme", theme)
+    localStorage.setItem("content-extract-theme", theme)
     const media = window.matchMedia("(prefers-color-scheme: dark)")
     const applyTheme = () => {
       const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme
@@ -144,7 +177,7 @@ function App() {
       }
     }, 300)
     return () => window.clearInterval(timer)
-  }, [running])
+  }, [consumeEvents, running])
 
   function updateForm<K extends keyof ExtractionForm>(key: K, value: ExtractionForm[K]) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -154,7 +187,7 @@ function App() {
     setForm((current) => ({
       ...current,
       mode,
-      outputDir: mode === "book" ? "outputs/book-name" : "outputs/pages",
+      outputDir: mode === "book" ? "outputs/book-name" : mode === "youtube" ? "outputs/youtube" : "outputs/pages",
       playwright: mode === "book" ? true : current.playwright,
     }))
   }
@@ -176,35 +209,10 @@ function App() {
     }))
   }
 
-  function consumeEvents(events: BridgeEvent[]) {
-    for (const event of events) {
-      if (event.type === "output" && event.text) setLogs((current) => [...current, event.text!])
-      if (event.type === "saved") {
-        setSavedCount((count) => count + 1)
-        setStatus(form.mode === "book" ? "Extracting chapters" : "Saving page")
-      }
-      if (event.type === "verification") {
-        setVerificationNeeded(true)
-        setStatus("Waiting for browser verification")
-      }
-      if (event.type === "finished") {
-        setRunning(false)
-        setVerificationNeeded(false)
-        if (event.exitCode === 0) {
-          setSavedCount(expectedOutputs)
-          setStatus("Extraction complete")
-        } else {
-          setStatus("Extraction stopped")
-          setError("The crawler did not finish. Open activity for details.")
-        }
-      }
-      if (event.type === "error") setError(event.text || "Something went wrong.")
-    }
-  }
-
   function validate() {
-    if (!/^https?:\/\/\S+$/i.test(form.url.trim())) return "Enter a complete public http:// or https:// URL."
-    if (!form.name.trim()) return form.mode === "book" ? "Enter a book name." : "Enter an output name."
+    if (form.mode !== "youtube" && !/^https?:\/\/\S+$/i.test(form.url.trim())) return "Enter a complete public http:// or https:// URL."
+    if (form.mode === "youtube" && !form.url.trim()) return "Enter a YouTube URL or video ID."
+    if (!form.name.trim()) return form.mode === "book" ? "Enter a book name." : form.mode === "youtube" ? "Enter a transcript name." : "Enter an output name."
     if (!form.outputDir.trim()) return "Choose an output folder."
     if (form.mode === "book" && (form.startChapter < 1 || form.endChapter < form.startChapter)) {
       return "The ending chapter must be at or after the starting chapter."
@@ -241,13 +249,16 @@ function App() {
       headed: form.headed,
       wait_for_user: form.waitForUser,
       overwrite: form.overwrite,
+      languages: form.languages,
+      translate_to: form.translateTo,
+      strict_language: form.strictLanguage,
     })
     if (!result.ok) {
-      setError(result.error || "The crawler could not start.")
+      setError(result.error || "The extractor could not start.")
       return
     }
     setRunning(true)
-    setStatus(form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
+    setStatus(form.mode === "youtube" ? "Fetching captions" : form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
   }
 
   async function chooseOutput() {
@@ -296,8 +307,8 @@ function App() {
               <Sparkles size={21} />
             </div>
             <div>
-              <p className="text-lg font-extrabold tracking-tight">Web Extractor</p>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Pages in. Clean knowledge out.</p>
+              <p className="text-lg font-extrabold tracking-tight">Content Extract</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Public content in. Clean knowledge out.</p>
             </div>
           </div>
           <ThemeSwitcher theme={theme} onChange={setTheme} />
@@ -317,7 +328,7 @@ function App() {
             transition={{ delay: 0.04 }}
             className="text-3xl leading-tight font-black tracking-[-0.035em] text-balance sm:text-4xl lg:text-5xl"
           >
-            Extract one page—or an entire book.
+            Extract pages, books, and YouTube captions.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0 }}
@@ -325,7 +336,7 @@ function App() {
             transition={{ delay: 0.12 }}
             className="mt-4 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base dark:text-slate-400"
           >
-            Choose a workflow, keep human verification in your hands, and save structured output without repeating terminal commands.
+            Choose a workflow, keep human verification in your hands, and save clean local output without repeating terminal commands.
           </motion.p>
         </section>
 
@@ -335,39 +346,41 @@ function App() {
           <div className="mb-7 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-extrabold tracking-tight">
-                {form.mode === "book" ? "Whole-book extraction" : "Web-page extraction"}
+                {form.mode === "book" ? "Whole-book extraction" : form.mode === "youtube" ? "YouTube transcript extraction" : "Web-page extraction"}
               </h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {form.mode === "book"
                   ? "One browser session, one clean file per chapter."
-                  : "Capture a single public page with only the rendering you need."}
+                  : form.mode === "youtube"
+                    ? "Download available captions in your preferred language."
+                    : "Capture a single public page with only the rendering you need."}
               </p>
             </div>
             <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300">
-              {form.mode === "book" ? `${expectedOutputs} chapters` : "1 page"}
+              {form.mode === "book" ? `${expectedOutputs} chapters` : form.mode === "youtube" ? "1 transcript" : "1 page"}
             </span>
           </div>
 
           <div className="grid min-w-0 grid-cols-1 gap-5 md:grid-cols-2">
-            <Field label={form.mode === "book" ? "Book URL" : "Page URL"} className="md:col-span-2">
+            <Field label={form.mode === "book" ? "Book URL" : form.mode === "youtube" ? "YouTube URL or video ID" : "Page URL"} className="md:col-span-2">
               <div className="relative">
                 <Globe2 className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-slate-400" size={17} />
                 <input
                   className="control pl-11"
                   value={form.url}
                   onChange={(event) => updateForm("url", event.target.value)}
-                  placeholder={form.mode === "book" ? "https://example.com/book/" : "https://example.com/article"}
+                  placeholder={form.mode === "book" ? "https://example.com/book/" : form.mode === "youtube" ? "https://youtube.com/watch?v=..." : "https://example.com/article"}
                   spellCheck={false}
                 />
               </div>
             </Field>
 
-            <Field label={form.mode === "book" ? "Book name" : "Output name"}>
+            <Field label={form.mode === "book" ? "Book name" : form.mode === "youtube" ? "Transcript name" : "Output name"}>
               <input
                 className="control"
                 value={form.name}
                 onChange={(event) => updateForm("name", event.target.value)}
-                placeholder={form.mode === "book" ? "Book Name" : "Article notes"}
+                placeholder={form.mode === "book" ? "Book Name" : form.mode === "youtube" ? "Lecture transcript" : "Article notes"}
               />
             </Field>
 
@@ -402,28 +415,47 @@ function App() {
               </motion.div>
             )}
 
-            <Field label="Output format">
-              <select className="control appearance-none" value={form.format} onChange={(event) => updateForm("format", event.target.value as OutputFormat)}>
-                <option value="markdown">Markdown (.md)</option>
-                <option value="json">JSON (.json)</option>
-                <option value="text">Plain text (.txt)</option>
-              </select>
-            </Field>
+            {form.mode === "youtube" ? (
+              <>
+                <Field label="Preferred languages">
+                  <input className="control" value={form.languages} onChange={(event) => updateForm("languages", event.target.value)} placeholder="en, en-US, am" />
+                </Field>
+                <Field label="Translate fallback to (optional)">
+                  <input className="control" value={form.translateTo} onChange={(event) => updateForm("translateTo", event.target.value)} placeholder="en" />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Output format">
+                  <select className="control appearance-none" value={form.format} onChange={(event) => updateForm("format", event.target.value as OutputFormat)}>
+                    <option value="markdown">Markdown (.md)</option>
+                    <option value="json">JSON (.json)</option>
+                    <option value="text">Plain text (.txt)</option>
+                  </select>
+                </Field>
 
-            <Field label={form.mode === "book" ? "Delay between chapters" : "Delay before fetching"}>
-              <div className="relative">
-                <input className="control pr-20" type="number" min={0} step={0.5} value={form.delay} onChange={(event) => updateForm("delay", Number(event.target.value))} />
-                <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-xs font-semibold text-slate-400">seconds</span>
-              </div>
-            </Field>
+                <Field label={form.mode === "book" ? "Delay between chapters" : "Delay before fetching"}>
+                  <div className="relative">
+                    <input className="control pr-20" type="number" min={0} step={0.5} value={form.delay} onChange={(event) => updateForm("delay", Number(event.target.value))} />
+                    <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-xs font-semibold text-slate-400">seconds</span>
+                  </div>
+                </Field>
+              </>
+            )}
           </div>
 
           <div className="mt-7 border-t border-slate-200 pt-6 dark:border-white/10">
-            <p className="field-label">Browser options</p>
+            <p className="field-label">{form.mode === "youtube" ? "Transcript options" : "Browser options"}</p>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <Toggle label="Render JavaScript" checked={form.mode === "book" || form.playwright} disabled={form.mode === "book"} onChange={setPlaywright} />
-              <Toggle label="Show browser" checked={form.headed} disabled={form.mode === "page" && !form.playwright} onChange={setHeaded} />
-              <Toggle label="Wait for verification" checked={form.waitForUser} disabled={!form.headed || (form.mode === "page" && !form.playwright)} onChange={(checked) => updateForm("waitForUser", checked)} />
+              {form.mode === "youtube" ? (
+                <Toggle label="Require preferred language" checked={form.strictLanguage} onChange={(checked) => updateForm("strictLanguage", checked)} />
+              ) : (
+                <>
+                  <Toggle label="Render JavaScript" checked={form.mode === "book" || form.playwright} disabled={form.mode === "book"} onChange={setPlaywright} />
+                  <Toggle label="Show browser" checked={form.headed} disabled={form.mode === "page" && !form.playwright} onChange={setHeaded} />
+                  <Toggle label="Wait for verification" checked={form.waitForUser} disabled={!form.headed || (form.mode === "page" && !form.playwright)} onChange={(checked) => updateForm("waitForUser", checked)} />
+                </>
+              )}
               <Toggle label="Overwrite files" checked={form.overwrite} onChange={(checked) => updateForm("overwrite", checked)} />
             </div>
           </div>
@@ -484,7 +516,7 @@ function App() {
         </AnimatePresence>
 
         <footer className="mt-auto pt-8 text-center text-xs text-slate-500 dark:text-slate-500">
-          Runs locally. Respects robots.txt and normal site access controls.
+          Runs locally. Respects normal site access controls and available caption permissions.
         </footer>
       </main>
     </div>
@@ -495,9 +527,10 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
   const options = [
     { id: "page" as const, icon: Globe2, title: "Web page", description: "Extract one article, lesson, or public page." },
     { id: "book" as const, icon: BookOpen, title: "Whole book", description: "Extract a numbered chapter range in one session." },
+    { id: "youtube" as const, icon: Youtube, title: "YouTube transcript", description: "Save available captions with language preferences." },
   ]
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 md:grid-cols-3">
       {options.map((option) => {
         const selected = mode === option.id
         const Icon = option.icon

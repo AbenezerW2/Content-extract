@@ -230,6 +230,8 @@ function MorphingDialogContainer({ children }: MorphingDialogContainerProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // The portal is intentionally enabled only after client mounting.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
     return () => setMounted(false);
   }, []);

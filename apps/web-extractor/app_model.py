@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 
 OUTPUT_FORMATS = ("markdown", "json", "text")
+DEFAULT_YOUTUBE_LANGUAGES = ("en", "en-US", "en-GB")
 
 
 class AppValidationError(ValueError):
@@ -75,6 +76,53 @@ class ExtractionOptions:
         return 1
 
 
+@dataclass(frozen=True)
+class YouTubeExtractionOptions:
+    url: str
+    name: str
+    output_dir: str
+    languages: tuple[str, ...] = DEFAULT_YOUTUBE_LANGUAGES
+    translate_to: str = ""
+    strict_language: bool = False
+    overwrite: bool = False
+
+    def validated(self) -> "YouTubeExtractionOptions":
+        url = self.url.strip()
+        name = self.name.strip()
+        output_dir = self.output_dir.strip()
+        languages = tuple(language.strip() for language in self.languages if language.strip())
+
+        if not url:
+            raise AppValidationError("Enter a YouTube URL or video ID.")
+        if not name:
+            raise AppValidationError("Enter a transcript name.")
+        if Path(name).name != name or name in {".", ".."}:
+            raise AppValidationError("Transcript name cannot contain folder separators.")
+        if not output_dir:
+            raise AppValidationError("Choose an output folder.")
+        if not languages:
+            raise AppValidationError("Enter at least one preferred caption language.")
+
+        return YouTubeExtractionOptions(
+            url=url,
+            name=name,
+            output_dir=output_dir,
+            languages=languages,
+            translate_to=self.translate_to.strip(),
+            strict_language=self.strict_language,
+            overwrite=self.overwrite,
+        )
+
+    @property
+    def output_path(self) -> Path:
+        name = self.name if self.name.lower().endswith(".txt") else f"{self.name}.txt"
+        return Path(self.output_dir).expanduser() / name
+
+    @property
+    def expected_outputs(self) -> int:
+        return 1
+
+
 def build_crawler_command(
     options: ExtractionOptions,
     python_executable: str,
@@ -113,6 +161,30 @@ def build_crawler_command(
             f"{options.delay:g}",
         ]
     )
+    if options.overwrite:
+        command.append("--overwrite")
+    return command
+
+
+def build_youtube_command(
+    options: YouTubeExtractionOptions,
+    python_executable: str,
+    extractor_path: str | Path,
+) -> list[str]:
+    options = options.validated()
+    command = [
+        python_executable,
+        str(extractor_path),
+        options.url,
+        "--output",
+        str(options.output_path),
+    ]
+    for language in options.languages:
+        command.extend(["--language", language])
+    if options.translate_to:
+        command.extend(["--translate", options.translate_to])
+    if options.strict_language:
+        command.append("--strict-language")
     if options.overwrite:
         command.append("--overwrite")
     return command

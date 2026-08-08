@@ -10,11 +10,19 @@ from typing import Any
 
 import webview
 
-from app_model import AppValidationError, ExtractionOptions, build_crawler_command
+from app_model import (
+    AppValidationError,
+    ExtractionOptions,
+    YouTubeExtractionOptions,
+    build_crawler_command,
+    build_youtube_command,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
+WORKSPACE_DIR = Path(os.environ.get("CONTENT_EXTRACT_ROOT", APP_DIR)).resolve()
 CRAWLER_PATH = APP_DIR / "crawler.py"
+YOUTUBE_EXTRACTOR_PATH = APP_DIR.parent / "youtube-extractor" / "youtube_transcript_extractor.py"
 FRONTEND_INDEX = APP_DIR / "frontend" / "dist" / "index.html"
 
 
@@ -51,8 +59,12 @@ class DesktopBridge:
             return {"ok": False, "error": "An extraction is already running."}
 
         try:
-            options = self._options_from_payload(payload)
-            command = build_crawler_command(options, sys.executable, CRAWLER_PATH)
+            if payload.get("mode") == "youtube":
+                options = self._youtube_options_from_payload(payload)
+                command = build_youtube_command(options, sys.executable, YOUTUBE_EXTRACTOR_PATH)
+            else:
+                options = self._options_from_payload(payload)
+                command = build_crawler_command(options, sys.executable, CRAWLER_PATH)
         except (AppValidationError, TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -61,7 +73,7 @@ class DesktopBridge:
         try:
             process = subprocess.Popen(
                 command,
-                cwd=APP_DIR,
+                cwd=WORKSPACE_DIR,
                 env=environment,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -87,6 +99,8 @@ class DesktopBridge:
                 lowered = line.lower()
                 if lowered.startswith("saved:"):
                     self._append_event("saved", path=line.split(":", 1)[1].strip())
+                elif lowered.startswith("transcript saved to '"):
+                    self._append_event("saved", path=line.split("'", 2)[1])
                 if "complete any verification" in lowered:
                     self._append_event("verification")
         finally:
@@ -156,7 +170,7 @@ class DesktopBridge:
     @staticmethod
     def _resolve_output_dir(value: str) -> Path:
         path = Path(value or "outputs").expanduser()
-        return (path if path.is_absolute() else APP_DIR / path).resolve()
+        return (path if path.is_absolute() else WORKSPACE_DIR / path).resolve()
 
     @staticmethod
     def _options_from_payload(payload: dict[str, Any]) -> ExtractionOptions:
@@ -176,9 +190,26 @@ class DesktopBridge:
             overwrite=bool(payload.get("overwrite", False)),
         ).validated()
 
+    @staticmethod
+    def _youtube_options_from_payload(payload: dict[str, Any]) -> YouTubeExtractionOptions:
+        languages = tuple(
+            language.strip()
+            for language in str(payload.get("languages", "en,en-US,en-GB")).split(",")
+            if language.strip()
+        )
+        return YouTubeExtractionOptions(
+            url=str(payload.get("url", "")),
+            name=str(payload.get("name", "")),
+            output_dir=str(payload.get("output_dir", "")),
+            languages=languages,
+            translate_to=str(payload.get("translate_to", "")),
+            strict_language=bool(payload.get("strict_language", False)),
+            overwrite=bool(payload.get("overwrite", False)),
+        ).validated()
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Launch the Web Extractor desktop app.")
+    parser = argparse.ArgumentParser(description="Launch the Content Extract desktop app.")
     parser.add_argument(
         "--dev",
         action="store_true",
@@ -203,7 +234,7 @@ def main() -> int:
 
     bridge = DesktopBridge()
     window = webview.create_window(
-        "Web Extractor",
+        "Content Extract",
         frontend_url,
         js_api=bridge,
         width=1120,
