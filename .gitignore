@@ -1,7 +1,8 @@
-.venv/
+.venv*/
 __pycache__/
 *.py[cod]
 .DS_Store
 **/outputs/
+.content-extract/
 apps/web-extractor/frontend/node_modules/
 apps/web-extractor/frontend/dist/

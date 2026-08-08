@@ -62,12 +62,32 @@ class DesktopBridgeTests(unittest.TestCase):
                 "output_dir": "outputs/youtube",
                 "languages": "am, en",
                 "strict_language": True,
+                "output_format": "json",
+                "playlist": True,
+                "max_videos": 10,
             }
         )
 
         self.assertEqual(options.languages, ("am", "en"))
-        self.assertEqual(options.output_path.as_posix(), "outputs/youtube/Course intro.txt")
         self.assertTrue(options.strict_language)
+        self.assertEqual(options.output_format, "json")
+        self.assertTrue(options.playlist)
+        self.assertEqual(options.expected_outputs, 10)
+
+    def test_builds_site_options_from_frontend_payload(self):
+        options = DesktopBridge._options_from_payload(
+            {
+                "mode": "site",
+                "url": "https://example.com",
+                "name": "",
+                "output_dir": "outputs/sites",
+                "output_format": "markdown",
+                "max_pages": 15,
+            }
+        )
+
+        self.assertTrue(options.crawl_site)
+        self.assertEqual(options.expected_outputs, 15)
 
 
 if __name__ == "__main__":

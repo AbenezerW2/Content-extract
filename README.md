@@ -1,14 +1,24 @@
 # Content Extract
 
 Content Extract is a local desktop and command-line toolkit for turning public
-web pages, chapter-based online books, and available YouTube captions into clean
-study files.
+web pages, whole sites, chapter-based online books, and available YouTube
+captions into clean study files.
 
 This monorepo combines the histories of
 [`web_crawler`](https://github.com/AbenezerW2/web_crawler) and
 [`youtube-extractor`](https://github.com/AbenezerW2/youtube-extractor). Both
 standalone command-line tools remain available, while the desktop app exposes
-all three workflows from one interface.
+the combined workflows from one interface.
+
+## Features
+
+- Extract one web page and use its page title as the default filename.
+- Crawl up to 30 same-site pages, following eligible links breadth-first.
+- Extract chapter-based online books.
+- Extract one YouTube transcript or a playlist of up to 30 videos.
+- Save any workflow as plain text, Markdown, or JSON.
+- Override automatically detected filenames when needed.
+- Reopen recent results from persistent, per-workflow history.
 
 ## Repository layout
 
@@ -42,8 +52,8 @@ cd ../../..
 python app.py
 ```
 
-Choose **Web page**, **Whole book**, or **YouTube transcript**. Every workflow
-runs locally and writes only to the output folder you choose.
+Choose **Web page**, **Whole site**, **Whole book**, or **YouTube**. Every
+workflow runs locally and writes only to the output folder you choose.
 
 For frontend development, run `npm run dev` inside
 `apps/web-extractor/frontend`, then launch:
@@ -57,8 +67,10 @@ python app.py --dev
 The original CLIs remain usable:
 
 ```bash
-python apps/web-extractor/crawler.py "https://example.com" --name "Example" --format markdown
-python apps/youtube-extractor/youtube_transcript_extractor.py "YOUTUBE_URL" --output transcript.txt
+python apps/web-extractor/crawler.py "https://example.com" --auto-name --format markdown
+python apps/web-extractor/crawler.py "https://example.com" --crawl-site --max-pages 30 --format json
+python apps/youtube-extractor/youtube_transcript_extractor.py "YOUTUBE_URL" --format markdown
+python apps/youtube-extractor/youtube_transcript_extractor.py "PLAYLIST_URL" --playlist --max-videos 30 --format json
 ```
 
 Run either command with `--help` for its complete options.
@@ -69,6 +81,7 @@ Use the tools only for content you are permitted to access. The web extractor
 honors `robots.txt` and does not bypass authentication, CAPTCHAs, paywalls, or
 access controls. The YouTube workflow downloads captions that are already
 available; it does not transcribe unavailable audio or bypass video restrictions.
+Audio/video transcription is a possible future workflow and is not included yet.
 
 Proxy credentials, when used, must be supplied through environment variables
 and must never be committed.

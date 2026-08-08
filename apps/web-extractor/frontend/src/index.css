@@ -43,6 +43,16 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+select option {
+  color: #172033;
+  background: #ffffff;
+}
+
+:root.dark select option {
+  color: #f8fafc;
+  background: #111827;
+}
+
 ::selection {
   color: white;
   background: #2563eb;

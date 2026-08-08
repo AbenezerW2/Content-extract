@@ -8,9 +8,11 @@ import {
   FileText,
   FolderOpen,
   Globe2,
+  History,
   Laptop,
   LoaderCircle,
   Moon,
+  Network,
   Play,
   ScrollText,
   Sparkles,
@@ -32,7 +34,7 @@ import {
 } from "@/components/ui/morphing-dialog"
 import { cn } from "@/lib/utils"
 
-type Mode = "page" | "book" | "youtube"
+type Mode = "page" | "site" | "book" | "youtube"
 type Theme = "light" | "dark" | "system"
 type OutputFormat = "markdown" | "json" | "text"
 
@@ -52,6 +54,17 @@ type ExtractionForm = {
   languages: string
   translateTo: string
   strictLanguage: boolean
+  playlist: boolean
+  maxVideos: number
+  maxPages: number
+}
+
+type HistoryEntry = {
+  timestamp: string
+  mode: Mode
+  source: string
+  path: string
+  label: string
 }
 
 type BridgeEvent = {
@@ -75,6 +88,7 @@ type DesktopApi = {
   send_verification: () => Promise<{ ok: boolean }>
   stop_extraction: () => Promise<{ ok: boolean }>
   open_output_folder: (path: string) => Promise<{ ok: boolean; error?: string }>
+  get_history: (mode: Mode) => Promise<HistoryEntry[]>
 }
 
 declare global {
@@ -99,9 +113,19 @@ const initialForm: ExtractionForm = {
   languages: "en, en-US, en-GB",
   translateTo: "",
   strictLanguage: false,
+  playlist: false,
+  maxVideos: 30,
+  maxPages: 30,
 }
 
 const spring = { type: "spring" as const, stiffness: 420, damping: 34 }
+
+const modeDetails: Record<Mode, { title: string; description: string; unit: string }> = {
+  page: { title: "Web-page extraction", description: "Capture one public page and name it from the page title by default.", unit: "page" },
+  site: { title: "Whole-site extraction", description: "Follow same-site links and save up to 30 public pages.", unit: "pages" },
+  book: { title: "Whole-book extraction", description: "Extract a numbered chapter range in one browser session.", unit: "chapters" },
+  youtube: { title: "YouTube transcript extraction", description: "Use detected video titles, custom formats, or a playlist of up to 30 videos.", unit: "transcripts" },
+}
 
 function getEffectiveTheme(theme: Theme) {
   if (theme !== "system") return theme
@@ -118,17 +142,37 @@ function App() {
   const [savedCount, setSavedCount] = useState(0)
   const [status, setStatus] = useState("Ready to extract")
   const [error, setError] = useState("")
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const cursorRef = useRef(0)
+  const modeDetail = modeDetails[form.mode]
 
-  const expectedOutputs = form.mode === "book" ? Math.max(1, form.endChapter - form.startChapter + 1) : 1
+  const expectedOutputs = form.mode === "book"
+    ? Math.max(1, form.endChapter - form.startChapter + 1)
+    : form.mode === "site"
+      ? form.maxPages
+      : form.mode === "youtube" && form.playlist
+        ? form.maxVideos
+        : 1
   const progress = running || savedCount ? Math.min(100, Math.round((savedCount / expectedOutputs) * 100)) : 0
+
+  const refreshHistory = useCallback(async () => {
+    if (!window.pywebview?.api) {
+      setHistory([])
+      return
+    }
+    try {
+      setHistory(await window.pywebview.api.get_history(form.mode))
+    } catch {
+      setHistory([])
+    }
+  }, [form.mode])
 
   const consumeEvents = useCallback((events: BridgeEvent[]) => {
     for (const event of events) {
       if (event.type === "output" && event.text) setLogs((current) => [...current, event.text!])
       if (event.type === "saved") {
         setSavedCount((count) => count + 1)
-        setStatus(form.mode === "book" ? "Extracting chapters" : form.mode === "youtube" ? "Saving transcript" : "Saving page")
+        setStatus(form.mode === "book" ? "Extracting chapters" : form.mode === "site" ? "Crawling site pages" : form.mode === "youtube" ? "Saving transcript" : "Saving page")
       }
       if (event.type === "verification") {
         setVerificationNeeded(true)
@@ -138,8 +182,9 @@ function App() {
         setRunning(false)
         setVerificationNeeded(false)
         if (event.exitCode === 0) {
-          setSavedCount(expectedOutputs)
+          setSavedCount((count) => count || (expectedOutputs === 1 ? 1 : 0))
           setStatus("Extraction complete")
+          void refreshHistory()
         } else {
           setStatus("Extraction stopped")
           setError("The extractor did not finish. Open activity for details.")
@@ -147,7 +192,7 @@ function App() {
       }
       if (event.type === "error") setError(event.text || "Something went wrong.")
     }
-  }, [expectedOutputs, form.mode])
+  }, [expectedOutputs, form.mode, refreshHistory])
 
   useEffect(() => {
     localStorage.setItem("content-extract-theme", theme)
@@ -179,6 +224,12 @@ function App() {
     return () => window.clearInterval(timer)
   }, [consumeEvents, running])
 
+  useEffect(() => {
+    // History is loaded from native storage whenever the workflow changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshHistory()
+  }, [refreshHistory])
+
   function updateForm<K extends keyof ExtractionForm>(key: K, value: ExtractionForm[K]) {
     setForm((current) => ({ ...current, [key]: value }))
   }
@@ -187,9 +238,17 @@ function App() {
     setForm((current) => ({
       ...current,
       mode,
-      outputDir: mode === "book" ? "outputs/book-name" : mode === "youtube" ? "outputs/youtube" : "outputs/pages",
-      playwright: mode === "book" ? true : current.playwright,
+      url: "",
+      name: "",
+      outputDir: mode === "book" ? "outputs/book-name" : mode === "youtube" ? "outputs/youtube" : mode === "site" ? "outputs/sites" : "outputs/pages",
+      format: mode === "youtube" ? "text" : current.format,
+      playwright: mode === "book",
+      headed: mode === "book",
+      waitForUser: mode === "book",
     }))
+    setError("")
+    setSavedCount(0)
+    setStatus("Ready to extract")
   }
 
   function setPlaywright(checked: boolean) {
@@ -212,11 +271,13 @@ function App() {
   function validate() {
     if (form.mode !== "youtube" && !/^https?:\/\/\S+$/i.test(form.url.trim())) return "Enter a complete public http:// or https:// URL."
     if (form.mode === "youtube" && !form.url.trim()) return "Enter a YouTube URL or video ID."
-    if (!form.name.trim()) return form.mode === "book" ? "Enter a book name." : form.mode === "youtube" ? "Enter a transcript name." : "Enter an output name."
+    if (form.mode === "book" && !form.name.trim()) return "Enter a book name."
     if (!form.outputDir.trim()) return "Choose an output folder."
     if (form.mode === "book" && (form.startChapter < 1 || form.endChapter < form.startChapter)) {
       return "The ending chapter must be at or after the starting chapter."
     }
+    if (form.mode === "site" && (form.maxPages < 1 || form.maxPages > 30)) return "Choose a whole-site limit between 1 and 30 pages."
+    if (form.mode === "youtube" && form.playlist && (form.maxVideos < 1 || form.maxVideos > 30)) return "Choose a playlist limit between 1 and 30 videos."
     return ""
   }
 
@@ -227,7 +288,7 @@ function App() {
       return
     }
     if (!window.pywebview?.api) {
-      setError("Launch the desktop interface with `python app.py` to run the crawler.")
+      setError("Launch the desktop interface with `python app.py` to run the extractor.")
       return
     }
 
@@ -252,13 +313,16 @@ function App() {
       languages: form.languages,
       translate_to: form.translateTo,
       strict_language: form.strictLanguage,
+      playlist: form.playlist,
+      max_videos: form.maxVideos,
+      max_pages: form.maxPages,
     })
     if (!result.ok) {
       setError(result.error || "The extractor could not start.")
       return
     }
     setRunning(true)
-    setStatus(form.mode === "youtube" ? "Fetching captions" : form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
+    setStatus(form.mode === "youtube" ? (form.playlist ? "Reading playlist" : "Fetching captions") : form.mode === "site" ? "Crawling site" : form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
   }
 
   async function chooseOutput() {
@@ -346,41 +410,37 @@ function App() {
           <div className="mb-7 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-extrabold tracking-tight">
-                {form.mode === "book" ? "Whole-book extraction" : form.mode === "youtube" ? "YouTube transcript extraction" : "Web-page extraction"}
+                {modeDetail.title}
               </h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {form.mode === "book"
-                  ? "One browser session, one clean file per chapter."
-                  : form.mode === "youtube"
-                    ? "Download available captions in your preferred language."
-                    : "Capture a single public page with only the rendering you need."}
+                {modeDetail.description}
               </p>
             </div>
             <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300">
-              {form.mode === "book" ? `${expectedOutputs} chapters` : form.mode === "youtube" ? "1 transcript" : "1 page"}
+              Up to {expectedOutputs} {expectedOutputs === 1 ? modeDetail.unit.replace(/s$/, "") : modeDetail.unit}
             </span>
           </div>
 
           <div className="grid min-w-0 grid-cols-1 gap-5 md:grid-cols-2">
-            <Field label={form.mode === "book" ? "Book URL" : form.mode === "youtube" ? "YouTube URL or video ID" : "Page URL"} className="md:col-span-2">
+            <Field label={form.mode === "book" ? "Book URL" : form.mode === "youtube" ? (form.playlist ? "YouTube playlist URL" : "YouTube URL or video ID") : form.mode === "site" ? "Starting site URL" : "Page URL"} className="md:col-span-2">
               <div className="relative">
                 <Globe2 className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-slate-400" size={17} />
                 <input
                   className="control pl-11"
                   value={form.url}
                   onChange={(event) => updateForm("url", event.target.value)}
-                  placeholder={form.mode === "book" ? "https://example.com/book/" : form.mode === "youtube" ? "https://youtube.com/watch?v=..." : "https://example.com/article"}
+                  placeholder={form.mode === "book" ? "https://example.com/book/" : form.mode === "youtube" ? (form.playlist ? "https://youtube.com/playlist?list=..." : "https://youtube.com/watch?v=...") : form.mode === "site" ? "https://example.com/" : "https://example.com/article"}
                   spellCheck={false}
                 />
               </div>
             </Field>
 
-            <Field label={form.mode === "book" ? "Book name" : form.mode === "youtube" ? "Transcript name" : "Output name"}>
+            <Field label={form.mode === "book" ? "Book name" : form.mode === "youtube" ? "Custom filename (optional)" : form.mode === "site" ? "Filename prefix (optional)" : "Custom filename (optional)"}>
               <input
                 className="control"
                 value={form.name}
                 onChange={(event) => updateForm("name", event.target.value)}
-                placeholder={form.mode === "book" ? "Book Name" : form.mode === "youtube" ? "Lecture transcript" : "Article notes"}
+                placeholder={form.mode === "book" ? "Book Name" : form.mode === "youtube" ? "Leave blank to use video titles" : form.mode === "site" ? "Leave blank to use page titles" : "Leave blank to use the page title"}
               />
             </Field>
 
@@ -415,6 +475,26 @@ function App() {
               </motion.div>
             )}
 
+            {form.mode === "site" && (
+              <Field label="Maximum pages (1–30)">
+                <input className="control" type="number" min={1} max={30} value={form.maxPages} onChange={(event) => updateForm("maxPages", Number(event.target.value))} />
+              </Field>
+            )}
+
+            {form.mode === "youtube" && form.playlist && (
+              <Field label="Maximum playlist videos (1–30)">
+                <input className="control" type="number" min={1} max={30} value={form.maxVideos} onChange={(event) => updateForm("maxVideos", Number(event.target.value))} />
+              </Field>
+            )}
+
+            <Field label="Output format">
+              <select className="control appearance-none" value={form.format} onChange={(event) => updateForm("format", event.target.value as OutputFormat)}>
+                <option value="markdown">Markdown (.md)</option>
+                <option value="json">JSON (.json)</option>
+                <option value="text">Plain text (.txt)</option>
+              </select>
+            </Field>
+
             {form.mode === "youtube" ? (
               <>
                 <Field label="Preferred languages">
@@ -425,22 +505,12 @@ function App() {
                 </Field>
               </>
             ) : (
-              <>
-                <Field label="Output format">
-                  <select className="control appearance-none" value={form.format} onChange={(event) => updateForm("format", event.target.value as OutputFormat)}>
-                    <option value="markdown">Markdown (.md)</option>
-                    <option value="json">JSON (.json)</option>
-                    <option value="text">Plain text (.txt)</option>
-                  </select>
-                </Field>
-
-                <Field label={form.mode === "book" ? "Delay between chapters" : "Delay before fetching"}>
-                  <div className="relative">
-                    <input className="control pr-20" type="number" min={0} step={0.5} value={form.delay} onChange={(event) => updateForm("delay", Number(event.target.value))} />
-                    <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-xs font-semibold text-slate-400">seconds</span>
-                  </div>
-                </Field>
-              </>
+              <Field label={form.mode === "book" ? "Delay between chapters" : form.mode === "site" ? "Delay between pages" : "Delay before fetching"}>
+                <div className="relative">
+                  <input className="control pr-20" type="number" min={0} step={0.5} value={form.delay} onChange={(event) => updateForm("delay", Number(event.target.value))} />
+                  <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-xs font-semibold text-slate-400">seconds</span>
+                </div>
+              </Field>
             )}
           </div>
 
@@ -448,12 +518,15 @@ function App() {
             <p className="field-label">{form.mode === "youtube" ? "Transcript options" : "Browser options"}</p>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {form.mode === "youtube" ? (
-                <Toggle label="Require preferred language" checked={form.strictLanguage} onChange={(checked) => updateForm("strictLanguage", checked)} />
+                <>
+                  <Toggle label="Extract a playlist" checked={form.playlist} onChange={(checked) => updateForm("playlist", checked)} />
+                  <Toggle label="Require preferred language" checked={form.strictLanguage} onChange={(checked) => updateForm("strictLanguage", checked)} />
+                </>
               ) : (
                 <>
                   <Toggle label="Render JavaScript" checked={form.mode === "book" || form.playwright} disabled={form.mode === "book"} onChange={setPlaywright} />
-                  <Toggle label="Show browser" checked={form.headed} disabled={form.mode === "page" && !form.playwright} onChange={setHeaded} />
-                  <Toggle label="Wait for verification" checked={form.waitForUser} disabled={!form.headed || (form.mode === "page" && !form.playwright)} onChange={(checked) => updateForm("waitForUser", checked)} />
+                  <Toggle label="Show browser" checked={form.headed} disabled={form.mode !== "book" && !form.playwright} onChange={setHeaded} />
+                  <Toggle label="Wait for verification" checked={form.waitForUser} disabled={!form.headed || (form.mode !== "book" && !form.playwright)} onChange={(checked) => updateForm("waitForUser", checked)} />
                 </>
               )}
               <Toggle label="Overwrite files" checked={form.overwrite} onChange={(checked) => updateForm("overwrite", checked)} />
@@ -471,7 +544,10 @@ function App() {
           </AnimatePresence>
 
           <div className="mt-7 flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
-            <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={expectedOutputs} />
+            <div className="flex flex-wrap gap-2">
+              <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={expectedOutputs} />
+              <HistoryDialog entries={history} mode={form.mode} onRefresh={refreshHistory} />
+            </div>
             <div className="flex flex-wrap gap-2 sm:justify-end">
               <motion.button whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }} onClick={openOutput} className="inline-flex h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 dark:border-white/10 dark:bg-white/[0.055] dark:text-slate-200">
                 <ExternalLink size={16} /> Open output
@@ -526,11 +602,12 @@ function App() {
 function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
   const options = [
     { id: "page" as const, icon: Globe2, title: "Web page", description: "Extract one article, lesson, or public page." },
+    { id: "site" as const, icon: Network, title: "Whole site", description: "Follow same-site links with a 30-page safety limit." },
     { id: "book" as const, icon: BookOpen, title: "Whole book", description: "Extract a numbered chapter range in one session." },
-    { id: "youtube" as const, icon: Youtube, title: "YouTube transcript", description: "Save available captions with language preferences." },
+    { id: "youtube" as const, icon: Youtube, title: "YouTube", description: "Save one transcript or a playlist in your chosen format." },
   ]
   return (
-    <div className="grid gap-3 md:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {options.map((option) => {
         const selected = mode === option.id
         const Icon = option.icon
@@ -619,6 +696,45 @@ function ActivityDialog({ logs, status, savedCount, expectedOutputs }: { logs: s
           </MorphingDialogTitle>
           <MorphingDialogDescription className="mt-5" variants={{ initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 8 } }}>
             <pre className="max-h-[55vh] min-h-48 overflow-auto whitespace-pre-wrap rounded-2xl border border-slate-200 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-300 dark:border-white/10">{logText}</pre>
+          </MorphingDialogDescription>
+          <MorphingDialogClose className="icon-button top-5 right-5"><X size={17} /></MorphingDialogClose>
+        </MorphingDialogContent>
+      </MorphingDialogContainer>
+    </MorphingDialog>
+  )
+}
+
+function HistoryDialog({ entries, mode, onRefresh }: { entries: HistoryEntry[]; mode: Mode; onRefresh: () => Promise<void> }) {
+  return (
+    <MorphingDialog transition={{ type: "spring", bounce: 0.04, duration: 0.42 }}>
+      <MorphingDialogTrigger className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-left dark:border-white/10 dark:bg-white/[0.035]">
+        <History size={17} className="text-blue-600 dark:text-blue-400" />
+        <span><span className="block text-xs font-extrabold">History</span><span className="block text-[0.68rem] text-slate-500 dark:text-slate-400">{entries.length} recent {mode} runs</span></span>
+      </MorphingDialogTrigger>
+      <MorphingDialogContainer>
+        <MorphingDialogContent className="relative mx-4 w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">
+          <MorphingDialogTitle className="flex items-center gap-3 pr-10">
+            <div className="grid size-10 place-items-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300"><History size={18} /></div>
+            <div className="flex-1"><h3 className="text-lg font-extrabold">{modeDetails[mode].title} history</h3><p className="text-sm text-slate-500 dark:text-slate-400">Saved locally on this computer</p></div>
+            <button className="rounded-lg px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-400/10" onClick={() => void onRefresh()}>Refresh</button>
+          </MorphingDialogTitle>
+          <MorphingDialogDescription className="mt-5" variants={{ initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 8 } }}>
+            {entries.length ? (
+              <div className="max-h-[55vh] space-y-2 overflow-auto pr-1">
+                {entries.map((entry) => (
+                  <div key={`${entry.timestamp}-${entry.path}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.035]">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm font-extrabold">{entry.label}</p>
+                      <time className="shrink-0 text-[0.68rem] text-slate-500 dark:text-slate-400">{new Date(entry.timestamp).toLocaleString()}</time>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{entry.source}</p>
+                    <p className="mt-2 truncate font-mono text-[0.68rem] text-slate-500 dark:text-slate-500">{entry.path}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-10 text-center text-sm text-slate-500 dark:border-white/15 dark:text-slate-400">Completed extractions for this section will appear here.</div>
+            )}
           </MorphingDialogDescription>
           <MorphingDialogClose className="icon-button top-5 right-5"><X size={17} /></MorphingDialogClose>
         </MorphingDialogContent>

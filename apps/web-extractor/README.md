@@ -1,4 +1,4 @@
-# Book Extractor
+# Web and Book Extractor
 
 Book Extractor turns public web pages and chapter-based online books into clean
 Markdown, JSON, or text. Use the desktop app for a guided workflow or keep using
@@ -6,10 +6,11 @@ the command-line interface for scripts and advanced control.
 
 ## Desktop app
 
-The local React desktop app has dedicated **Web page** and **Whole book**
-workflows, responsive controls, light/dark/system themes, a visible verification
-handoff, chapter progress, live activity logs, cancellation, and a shortcut to
-the output folder. Extraction stays on your computer.
+The local React desktop app has dedicated **Web page**, **Whole site**, and
+**Whole book** workflows, responsive controls, light/dark/system themes, a
+visible verification handoff, progress, persistent per-workflow history, live
+activity logs, cancellation, and a shortcut to the output folder. Extraction
+stays on your computer.
 
 Install the app and browser dependencies:
 
@@ -59,6 +60,18 @@ Print JSON:
 
 ```bash
 python crawler.py "https://example.com"
+```
+
+Use the page title as a safe filename automatically:
+
+```bash
+python crawler.py "https://example.com/article" --auto-name --format markdown
+```
+
+Crawl eligible links on the same site, up to the safety limit of 30 pages:
+
+```bash
+python crawler.py "https://example.com" --crawl-site --max-pages 30 --format text
 ```
 
 Save it to a file:
@@ -159,7 +172,7 @@ because fragments are locations inside the same downloaded page.
 
 - The tool checks `robots.txt` and refuses disallowed pages. Missing or unsupported responses (HTTP 404, 405, or 410) permit fetching, while access-denied and server-error responses remain conservative. Also follow the site's terms of service and applicable law.
 - It does not log in, submit forms, retain cookies, or bypass authentication. Use an official API or obtain permission for protected data.
-- It extracts one page per run; it does not recursively follow links. For batches, add a delay and respect published rate limits. HTTP 429 means slow down and honor `Retry-After`.
+- Whole-site mode follows only same-origin HTTP(S) page links, skips common binary/media files, and stops at 30 pages. Add a delay and respect published rate limits. HTTP 429 means slow down and honor `Retry-After`.
 - Only public HTTP(S) destinations are accepted. Localhost, private/link-local IPs, embedded URL credentials, excessive redirects, large responses, and non-HTML responses are rejected.
 - Site markup varies, so the generic JSON may need site-specific selectors. Images and links are listed, but binary files are not downloaded.
 - DNS rebinding and browser subrequests are difficult to secure perfectly. Do not expose this script directly as a public web service without stronger network-level egress controls, request queues, quotas, and audit logging.
