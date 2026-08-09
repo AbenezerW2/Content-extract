@@ -1,6 +1,5 @@
 import { AnimatePresence, motion } from "motion/react"
 import {
-  BookOpen,
   Check,
   ChevronRight,
   CircleStop,
@@ -12,17 +11,21 @@ import {
   Laptop,
   LoaderCircle,
   Moon,
-  Network,
   Play,
   ScrollText,
   Sparkles,
   Sun,
-  Youtube,
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { FlickeringGrid } from "@/components/ui/flickering-grid"
+import { HexagonPattern } from "@/components/ui/hexagon-pattern"
+import {
+  BookStackWorkflowIcon,
+  WebPageWorkflowIcon,
+  WholeSiteWorkflowIcon,
+  YouTubeWorkflowIcon,
+} from "@/components/workflow-icons"
 import {
   MorphingDialog,
   MorphingDialogClose,
@@ -127,15 +130,9 @@ const modeDetails: Record<Mode, { title: string; description: string; unit: stri
   youtube: { title: "YouTube transcript extraction", description: "Use detected video titles, custom formats, or a playlist of up to 30 videos.", unit: "transcripts" },
 }
 
-function getEffectiveTheme(theme: Theme) {
-  if (theme !== "system") return theme
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-}
-
 function App() {
   const [form, setForm] = useState<ExtractionForm>(initialForm)
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("content-extract-theme") as Theme) || "system")
-  const [effectiveTheme, setEffectiveTheme] = useState<"light" | "dark">(() => getEffectiveTheme(theme))
   const [running, setRunning] = useState(false)
   const [verificationNeeded, setVerificationNeeded] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
@@ -199,7 +196,6 @@ function App() {
     const media = window.matchMedia("(prefers-color-scheme: dark)")
     const applyTheme = () => {
       const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme
-      setEffectiveTheme(resolved)
       document.documentElement.classList.toggle("dark", resolved === "dark")
       document.documentElement.style.colorScheme = resolved
     }
@@ -354,15 +350,20 @@ function App() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-slate-100 text-slate-950 transition-colors duration-500 dark:bg-[#070b12] dark:text-white">
-      <FlickeringGrid
-        className="pointer-events-none fixed inset-0 z-0 h-screen w-screen opacity-55 [mask-image:radial-gradient(ellipse_at_center,black_10%,transparent_76%)] dark:opacity-35"
-        squareSize={3}
-        gridGap={8}
-        flickerChance={0.08}
-        maxOpacity={effectiveTheme === "dark" ? 0.28 : 0.16}
-        color={effectiveTheme === "dark" ? "#60a5fa" : "#2563eb"}
+      <HexagonPattern
+        hexagons={[
+          [1, 1],
+          [4, 4],
+          [2, 2],
+          [3, 4],
+          [5, 4],
+          [8, 2],
+          [6, 3],
+          [8, 5],
+          [10, 10],
+        ]}
+        className="fixed inset-0 z-0 h-screen w-screen skew-y-6 mask-[radial-gradient(420px_circle_at_center,white,transparent)] dark:fill-blue-400/10 dark:stroke-blue-300/15"
       />
-      <div className="pointer-events-none fixed inset-0 z-0 bg-[radial-gradient(circle_at_15%_10%,rgba(59,130,246,0.14),transparent_28%),radial-gradient(circle_at_90%_78%,rgba(14,165,233,0.10),transparent_26%)]" />
 
       <main className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
         <header className="mb-8 flex items-center justify-between gap-4">
@@ -601,10 +602,10 @@ function App() {
 
 function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
   const options = [
-    { id: "page" as const, icon: Globe2, title: "Web page", description: "Extract one article, lesson, or public page." },
-    { id: "site" as const, icon: Network, title: "Whole site", description: "Follow same-site links with a 30-page safety limit." },
-    { id: "book" as const, icon: BookOpen, title: "Whole book", description: "Extract a numbered chapter range in one session." },
-    { id: "youtube" as const, icon: Youtube, title: "YouTube", description: "Save one transcript or a playlist in your chosen format." },
+    { id: "page" as const, icon: WebPageWorkflowIcon, title: "Web page", description: "Extract one article, lesson, or public page." },
+    { id: "site" as const, icon: WholeSiteWorkflowIcon, title: "Whole site", description: "Follow same-site links with a 30-page safety limit." },
+    { id: "book" as const, icon: BookStackWorkflowIcon, title: "Whole book", description: "Extract a numbered chapter range in one session." },
+    { id: "youtube" as const, icon: YouTubeWorkflowIcon, title: "YouTube", description: "Save one transcript or a playlist in your chosen format." },
   ]
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -628,8 +629,8 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
           >
             {selected && <motion.div layoutId="mode-glow" className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.22),transparent_38%)]" />}
             <div className="relative flex items-start gap-4">
-              <div className={cn("grid size-11 shrink-0 place-items-center rounded-xl", selected ? "bg-white/15" : "bg-slate-100 text-blue-600 dark:bg-white/[0.07] dark:text-blue-400")}>
-                <Icon size={20} />
+              <div className={cn("grid size-13 shrink-0 place-items-center rounded-xl border p-1.5 shadow-sm", selected ? "border-white/35 bg-white" : "border-slate-200 bg-white dark:border-white/10 dark:bg-slate-900")}>
+                <Icon className="size-full" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
