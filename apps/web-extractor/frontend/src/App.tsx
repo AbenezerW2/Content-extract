@@ -19,12 +19,11 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import binaryBooksArt from "@/assets/binary-books.png"
+import youtubeExtractionArt from "@/assets/youtube-extraction.png"
 import { HexagonPattern } from "@/components/ui/hexagon-pattern"
 import {
-  BookStackWorkflowIcon,
   WebPageWorkflowIcon,
-  WholeSiteWorkflowIcon,
-  YouTubeWorkflowIcon,
 } from "@/components/workflow-icons"
 import {
   MorphingDialog,
@@ -38,6 +37,7 @@ import {
 import { cn } from "@/lib/utils"
 
 type Mode = "page" | "site" | "book" | "youtube"
+type Workflow = "web" | "book" | "youtube"
 type Theme = "light" | "dark" | "system"
 type OutputFormat = "markdown" | "json" | "text"
 
@@ -49,6 +49,7 @@ type ExtractionForm = {
   format: OutputFormat
   startChapter: number
   endChapter: number
+  bookMultiple: boolean
   delay: number
   playwright: boolean
   headed: boolean
@@ -58,8 +59,8 @@ type ExtractionForm = {
   translateTo: string
   strictLanguage: boolean
   playlist: boolean
-  maxVideos: number
-  maxPages: number
+  maxVideos: number | ""
+  maxPages: number | ""
 }
 
 type HistoryEntry = {
@@ -108,6 +109,7 @@ const initialForm: ExtractionForm = {
   format: "markdown",
   startChapter: 1,
   endChapter: 12,
+  bookMultiple: true,
   delay: 1,
   playwright: true,
   headed: true,
@@ -126,7 +128,7 @@ const spring = { type: "spring" as const, stiffness: 420, damping: 34 }
 const modeDetails: Record<Mode, { title: string; description: string; unit: string }> = {
   page: { title: "Web-page extraction", description: "Capture one public page and name it from the page title by default.", unit: "page" },
   site: { title: "Whole-site extraction", description: "Follow same-site links and save up to 30 public pages.", unit: "pages" },
-  book: { title: "Whole-book extraction", description: "Extract a numbered chapter range in one browser session.", unit: "chapters" },
+  book: { title: "Book extraction", description: "Extract one chapter or a numbered chapter range in one browser session.", unit: "chapters" },
   youtube: { title: "YouTube transcript extraction", description: "Use detected video titles, custom formats, or a playlist of up to 30 videos.", unit: "transcripts" },
 }
 
@@ -141,7 +143,11 @@ function App() {
   const [error, setError] = useState("")
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const cursorRef = useRef(0)
-  const modeDetail = modeDetails[form.mode]
+  const modeDetail = form.mode === "book"
+    ? form.bookMultiple
+      ? { title: "Multiple-chapter extraction", description: "Extract a numbered chapter range in one browser session.", unit: "chapters" }
+      : { title: "Single-chapter extraction", description: "Extract one numbered chapter into a clean local file.", unit: "chapter" }
+    : modeDetails[form.mode]
 
   const expectedOutputs = form.mode === "book"
     ? Math.max(1, form.endChapter - form.startChapter + 1)
@@ -150,7 +156,8 @@ function App() {
       : form.mode === "youtube" && form.playlist
         ? form.maxVideos
         : 1
-  const progress = running || savedCount ? Math.min(100, Math.round((savedCount / expectedOutputs) * 100)) : 0
+  const safeExpectedOutputs = Math.max(1, Number(expectedOutputs) || 1)
+  const progress = running || savedCount ? Math.min(100, Math.round((savedCount / safeExpectedOutputs) * 100)) : 0
 
   const refreshHistory = useCallback(async () => {
     if (!window.pywebview?.api) {
@@ -179,7 +186,7 @@ function App() {
         setRunning(false)
         setVerificationNeeded(false)
         if (event.exitCode === 0) {
-          setSavedCount((count) => count || (expectedOutputs === 1 ? 1 : 0))
+          setSavedCount((count) => count || (safeExpectedOutputs === 1 ? 1 : 0))
           setStatus("Extraction complete")
           void refreshHistory()
         } else {
@@ -189,7 +196,7 @@ function App() {
       }
       if (event.type === "error") setError(event.text || "Something went wrong.")
     }
-  }, [expectedOutputs, form.mode, refreshHistory])
+  }, [safeExpectedOutputs, form.mode, refreshHistory])
 
   useEffect(() => {
     localStorage.setItem("content-extract-theme", theme)
@@ -234,8 +241,8 @@ function App() {
     setForm((current) => ({
       ...current,
       mode,
-      url: "",
-      name: "",
+      url: (current.mode === "page" || current.mode === "site") && (mode === "page" || mode === "site") ? current.url : "",
+      name: (current.mode === "page" || current.mode === "site") && (mode === "page" || mode === "site") ? current.name : "",
       outputDir: "~/Documents/Extracted",
       format: mode === "youtube" ? "text" : current.format,
       playwright: mode === "book",
@@ -245,6 +252,28 @@ function App() {
     setError("")
     setSavedCount(0)
     setStatus("Ready to extract")
+  }
+
+  function setWorkflow(workflow: Workflow) {
+    if ((workflow === "web" && (form.mode === "page" || form.mode === "site")) || workflow === form.mode) return
+    setMode(workflow === "web" ? (form.mode === "site" ? "site" : "page") : workflow)
+  }
+
+  function setBookMultiple(multiple: boolean) {
+    setForm((current) => ({
+      ...current,
+      bookMultiple: multiple,
+      endChapter: multiple ? Math.max(current.endChapter, current.startChapter + 1) : current.startChapter,
+    }))
+    setError("")
+  }
+
+  function setBookStartChapter(chapter: number) {
+    setForm((current) => ({
+      ...current,
+      startChapter: chapter,
+      endChapter: current.bookMultiple ? current.endChapter : chapter,
+    }))
   }
 
   function setPlaywright(checked: boolean) {
@@ -272,8 +301,10 @@ function App() {
     if (form.mode === "book" && (form.startChapter < 1 || form.endChapter < form.startChapter)) {
       return "The ending chapter must be at or after the starting chapter."
     }
-    if (form.mode === "site" && (form.maxPages < 1 || form.maxPages > 30)) return "Choose a whole-site limit between 1 and 30 pages."
-    if (form.mode === "youtube" && form.playlist && (form.maxVideos < 1 || form.maxVideos > 30)) return "Choose a playlist limit between 1 and 30 videos."
+    const maxPages = Number(form.maxPages)
+    const maxVideos = Number(form.maxVideos)
+    if (form.mode === "site" && (maxPages < 1 || maxPages > 30)) return "Choose a whole-site limit between 1 and 30 pages."
+    if (form.mode === "youtube" && form.playlist && (maxVideos < 1 || maxVideos > 30)) return "Choose a playlist limit between 1 and 30 videos."
     return ""
   }
 
@@ -310,8 +341,8 @@ function App() {
       translate_to: form.translateTo,
       strict_language: form.strictLanguage,
       playlist: form.playlist,
-      max_videos: form.maxVideos,
-      max_pages: form.maxPages,
+      max_videos: Number(form.maxVideos),
+      max_pages: Number(form.maxPages),
     })
     if (!result.ok) {
       setError(result.error || "The extractor could not start.")
@@ -362,7 +393,8 @@ function App() {
           [8, 5],
           [10, 10],
         ]}
-        className="fixed inset-0 z-0 h-screen w-screen skew-y-6 mask-[radial-gradient(420px_circle_at_center,white,transparent)] dark:fill-blue-400/10 dark:stroke-blue-300/15"
+        strokeWidth={1.15}
+        className="fixed inset-0 z-0 h-screen w-screen skew-y-6 mask-[radial-gradient(1000px_circle_at_50%_38%,white,transparent)] dark:fill-blue-400/10 dark:stroke-blue-300/28"
       />
 
       <main className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
@@ -405,7 +437,7 @@ function App() {
           </motion.p>
         </section>
 
-        <ModePicker mode={form.mode} onChange={setMode} />
+        <ModePicker mode={form.mode} onChange={setWorkflow} />
 
         <motion.section layout transition={spring} className="glass-card mt-5 p-5 sm:p-7 lg:p-8">
           <div className="mb-7 flex flex-wrap items-start justify-between gap-3">
@@ -418,9 +450,16 @@ function App() {
               </p>
             </div>
             <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300">
-              Up to {expectedOutputs} {expectedOutputs === 1 ? modeDetail.unit.replace(/s$/, "") : modeDetail.unit}
+              Up to {safeExpectedOutputs} {safeExpectedOutputs === 1 ? modeDetail.unit.replace(/s$/, "") : modeDetail.unit}
             </span>
           </div>
+
+          <WorkflowVariantTabs
+            form={form}
+            onWebChange={setMode}
+            onBookChange={setBookMultiple}
+            onYouTubeChange={(playlist) => updateForm("playlist", playlist)}
+          />
 
           <div className="grid min-w-0 grid-cols-1 gap-5 md:grid-cols-2">
             <Field label={form.mode === "book" ? "Book URL" : form.mode === "youtube" ? (form.playlist ? "YouTube playlist URL" : "YouTube URL or video ID") : form.mode === "site" ? "Starting site URL" : "Page URL"} className="md:col-span-2">
@@ -459,7 +498,7 @@ function App() {
               </div>
             </Field>
 
-            {form.mode === "book" && (
+            {form.mode === "book" && form.bookMultiple && (
               <motion.div
                 key="chapter-range"
                 initial={{ opacity: 0, y: -10 }}
@@ -468,7 +507,7 @@ function App() {
                 className="grid grid-cols-2 gap-3 md:col-span-2 md:max-w-md"
               >
                 <Field label="Start chapter">
-                  <input className="control" type="number" min={1} value={form.startChapter} onChange={(event) => updateForm("startChapter", Number(event.target.value))} />
+                  <input className="control" type="number" min={1} value={form.startChapter} onChange={(event) => setBookStartChapter(Number(event.target.value))} />
                 </Field>
                 <Field label="End chapter">
                   <input className="control" type="number" min={1} value={form.endChapter} onChange={(event) => updateForm("endChapter", Number(event.target.value))} />
@@ -476,15 +515,23 @@ function App() {
               </motion.div>
             )}
 
+            {form.mode === "book" && !form.bookMultiple && (
+              <motion.div key="single-chapter" initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="md:col-span-2 md:max-w-48">
+                <Field label="Chapter number">
+                  <input className="control" type="number" min={1} value={form.startChapter} onChange={(event) => setBookStartChapter(Number(event.target.value))} />
+                </Field>
+              </motion.div>
+            )}
+
             {form.mode === "site" && (
               <Field label="Maximum pages (1–30)">
-                <input className="control" type="number" min={1} max={30} value={form.maxPages} onChange={(event) => updateForm("maxPages", Number(event.target.value))} />
+                <input className="control" type="number" min={1} max={30} value={form.maxPages} onChange={(event) => updateForm("maxPages", event.target.value === "" ? "" : Number(event.target.value))} />
               </Field>
             )}
 
             {form.mode === "youtube" && form.playlist && (
               <Field label="Maximum playlist videos (1–30)">
-                <input className="control" type="number" min={1} max={30} value={form.maxVideos} onChange={(event) => updateForm("maxVideos", Number(event.target.value))} />
+                <input className="control" type="number" min={1} max={30} value={form.maxVideos} onChange={(event) => updateForm("maxVideos", event.target.value === "" ? "" : Number(event.target.value))} />
               </Field>
             )}
 
@@ -520,7 +567,6 @@ function App() {
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {form.mode === "youtube" ? (
                 <>
-                  <Toggle label="Extract a playlist" checked={form.playlist} onChange={(checked) => updateForm("playlist", checked)} />
                   <Toggle label="Require preferred language" checked={form.strictLanguage} onChange={(checked) => updateForm("strictLanguage", checked)} />
                 </>
               ) : (
@@ -546,7 +592,7 @@ function App() {
 
           <div className="mt-7 flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
             <div className="flex flex-wrap gap-2">
-              <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={expectedOutputs} />
+              <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={safeExpectedOutputs} />
               <HistoryDialog entries={history} mode={form.mode} onRefresh={refreshHistory} />
             </div>
             <div className="flex flex-wrap gap-2 sm:justify-end">
@@ -576,7 +622,7 @@ function App() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <p className="truncate text-sm font-extrabold">{status}</p>
-                    <p className="shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">{savedCount} / {expectedOutputs}</p>
+                    <p className="shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">{savedCount} / {safeExpectedOutputs}</p>
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
                     <motion.div className="h-full rounded-full bg-blue-600" animate={{ width: `${progress}%` }} transition={spring} />
@@ -600,18 +646,31 @@ function App() {
   )
 }
 
-function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
+function ModePicker({ mode, onChange }: { mode: Mode; onChange: (workflow: Workflow) => void }) {
   const options = [
-    { id: "page" as const, icon: WebPageWorkflowIcon, title: "Web page", description: "Extract one article, lesson, or public page." },
-    { id: "site" as const, icon: WholeSiteWorkflowIcon, title: "Whole site", description: "Follow same-site links with a 30-page safety limit." },
-    { id: "book" as const, icon: BookStackWorkflowIcon, title: "Whole book", description: "Extract a numbered chapter range in one session." },
-    { id: "youtube" as const, icon: YouTubeWorkflowIcon, title: "YouTube", description: "Save one transcript or a playlist in your chosen format." },
+    {
+      id: "web" as const,
+      title: "Web",
+      description: "Extract one public page or crawl a whole site.",
+      visual: <WebPageWorkflowIcon className="size-full" />,
+    },
+    {
+      id: "book" as const,
+      title: "Book",
+      description: "Save one chapter or a numbered chapter range.",
+      visual: <img src={binaryBooksArt} alt="" className="size-[115%] object-contain" />,
+    },
+    {
+      id: "youtube" as const,
+      title: "YouTube",
+      description: "Save one transcript or extract a playlist.",
+      visual: <img src={youtubeExtractionArt} alt="" className="size-[118%] object-contain" />,
+    },
   ]
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-3 md:grid-cols-3">
       {options.map((option) => {
-        const selected = mode === option.id
-        const Icon = option.icon
+        const selected = option.id === "web" ? mode === "page" || mode === "site" : mode === option.id
         return (
           <motion.button
             key={option.id}
@@ -621,16 +680,16 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
             transition={spring}
             onClick={() => onChange(option.id)}
             className={cn(
-              "relative overflow-hidden rounded-2xl border p-4 text-left transition-colors sm:p-5",
+              "relative min-h-32 overflow-hidden rounded-2xl border p-4 text-left shadow-lg backdrop-blur-[24px] backdrop-saturate-150 transition-all sm:p-5",
               selected
-                ? "border-blue-500 bg-blue-600 text-white shadow-xl shadow-blue-600/20"
-                : "border-slate-200 bg-white/80 text-slate-900 backdrop-blur-xl hover:border-slate-300 dark:border-white/10 dark:bg-slate-950/70 dark:text-white dark:hover:border-white/20",
+                ? "border-blue-300/70 bg-blue-600/76 text-white shadow-blue-900/20"
+                : "border-white/75 bg-white/24 text-slate-900 shadow-slate-900/8 hover:border-blue-300/70 hover:bg-white/34 dark:border-white/14 dark:bg-white/[0.018] dark:text-white dark:shadow-black/25 dark:hover:border-blue-400/35 dark:hover:bg-white/[0.045]",
             )}
           >
             {selected && <motion.div layoutId="mode-glow" className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.22),transparent_38%)]" />}
             <div className="relative flex items-start gap-4">
-              <div className={cn("grid size-13 shrink-0 place-items-center rounded-xl border p-1.5 shadow-sm", selected ? "border-white/35 bg-white" : "border-slate-200 bg-white dark:border-white/10 dark:bg-slate-900")}>
-                <Icon className="size-full" />
+              <div className={cn("grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl border p-1.5 shadow-sm", selected ? "border-white/40 bg-white/96" : "border-white/75 bg-white/74 dark:border-white/10 dark:bg-slate-900/70")}>
+                {option.visual}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
@@ -643,6 +702,54 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
           </motion.button>
         )
       })}
+    </div>
+  )
+}
+
+function WorkflowVariantTabs({
+  form,
+  onWebChange,
+  onBookChange,
+  onYouTubeChange,
+}: {
+  form: ExtractionForm
+  onWebChange: (mode: "page" | "site") => void
+  onBookChange: (multiple: boolean) => void
+  onYouTubeChange: (playlist: boolean) => void
+}) {
+  const options = form.mode === "page" || form.mode === "site"
+    ? [
+        { id: "page", label: "One page", selected: form.mode === "page", select: () => onWebChange("page") },
+        { id: "site", label: "Whole site", selected: form.mode === "site", select: () => onWebChange("site") },
+      ]
+    : form.mode === "book"
+      ? [
+          { id: "single", label: "One chapter", selected: !form.bookMultiple, select: () => onBookChange(false) },
+          { id: "multiple", label: "Multiple chapters", selected: form.bookMultiple, select: () => onBookChange(true) },
+        ]
+      : [
+          { id: "video", label: "Single video", selected: !form.playlist, select: () => onYouTubeChange(false) },
+          { id: "playlist", label: "Playlist", selected: form.playlist, select: () => onYouTubeChange(true) },
+        ]
+
+  return (
+    <div className="mb-7 inline-flex rounded-2xl border border-white/65 bg-white/28 p-1.5 shadow-sm backdrop-blur-[20px] dark:border-white/10 dark:bg-white/[0.025]" role="tablist" aria-label="Extraction scope">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          role="tab"
+          aria-selected={option.selected}
+          onClick={option.select}
+          className={cn(
+            "min-w-32 rounded-xl px-4 py-2.5 text-sm font-bold transition-all",
+            option.selected
+              ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+              : "text-slate-600 hover:bg-white/65 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-white",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   )
 }
