@@ -26,6 +26,7 @@ CRAWLER_PATH = APP_DIR / "crawler.py"
 YOUTUBE_EXTRACTOR_PATH = APP_DIR.parent / "youtube-extractor" / "youtube_transcript_extractor.py"
 FRONTEND_INDEX = APP_DIR / "frontend" / "dist" / "index.html"
 HISTORY_PATH = WORKSPACE_DIR / ".content-extract" / "history.json"
+DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "Extracted"
 
 
 class DesktopBridge:
@@ -186,7 +187,7 @@ class DesktopBridge:
 
     @staticmethod
     def _resolve_output_dir(value: str) -> Path:
-        path = Path(value or "outputs").expanduser()
+        path = Path(value).expanduser() if value.strip() else DEFAULT_OUTPUT_DIR
         return (path if path.is_absolute() else WORKSPACE_DIR / path).resolve()
 
     @staticmethod
@@ -196,7 +197,7 @@ class DesktopBridge:
         return ExtractionOptions(
             url=str(payload.get("url", "")),
             name=str(payload.get("name", "")),
-            output_dir=str(payload.get("output_dir", "")),
+            output_dir=str(DesktopBridge._resolve_output_dir(str(payload.get("output_dir", "")))),
             output_format=str(payload.get("output_format", "markdown")),
             whole_book=whole_book,
             start_chapter=int(payload.get("start_chapter", 1)),
@@ -220,7 +221,7 @@ class DesktopBridge:
         return YouTubeExtractionOptions(
             url=str(payload.get("url", "")),
             name=str(payload.get("name", "")),
-            output_dir=str(payload.get("output_dir", "")),
+            output_dir=str(DesktopBridge._resolve_output_dir(str(payload.get("output_dir", "")))),
             languages=languages,
             translate_to=str(payload.get("translate_to", "")),
             strict_language=bool(payload.get("strict_language", False)),

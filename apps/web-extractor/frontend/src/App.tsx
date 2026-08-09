@@ -104,7 +104,7 @@ const initialForm: ExtractionForm = {
   mode: "book",
   url: "",
   name: "",
-  outputDir: "outputs/book-name",
+  outputDir: "~/Documents/Extracted",
   format: "markdown",
   startChapter: 1,
   endChapter: 12,
@@ -236,7 +236,7 @@ function App() {
       mode,
       url: "",
       name: "",
-      outputDir: mode === "book" ? "outputs/book-name" : mode === "youtube" ? "outputs/youtube" : mode === "site" ? "outputs/sites" : "outputs/pages",
+      outputDir: "~/Documents/Extracted",
       format: mode === "youtube" ? "text" : current.format,
       playwright: mode === "book",
       headed: mode === "book",
@@ -451,7 +451,7 @@ function App() {
                   className="control min-w-0 flex-1"
                   value={form.outputDir}
                   onChange={(event) => updateForm("outputDir", event.target.value)}
-                  placeholder="outputs/book-name"
+                  placeholder="~/Documents/Extracted"
                 />
                 <motion.button whileHover={{ y: -2 }} whileTap={{ scale: 0.96 }} className="icon-button" onClick={chooseOutput} title="Choose folder">
                   <FolderOpen size={18} />

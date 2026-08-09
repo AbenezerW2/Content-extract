@@ -54,6 +54,8 @@ python app.py
 
 Choose **Web page**, **Whole site**, **Whole book**, or **YouTube**. Every
 workflow runs locally and writes only to the output folder you choose.
+The desktop app defaults to `~/Documents/Extracted`; you can replace it with
+another folder at any time.
 
 For frontend development, run `npm run dev` inside
 `apps/web-extractor/frontend`, then launch:

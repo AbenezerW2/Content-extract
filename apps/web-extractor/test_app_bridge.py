@@ -1,9 +1,25 @@
 import unittest
+from pathlib import Path
 
-from app import DesktopBridge
+from app import DEFAULT_OUTPUT_DIR, DesktopBridge
 
 
 class DesktopBridgeTests(unittest.TestCase):
+    def test_default_output_directory_is_documents_extracted(self):
+        self.assertEqual(DEFAULT_OUTPUT_DIR, Path.home() / "Documents" / "Extracted")
+        self.assertEqual(DesktopBridge._resolve_output_dir(""), DEFAULT_OUTPUT_DIR.resolve())
+
+    def test_expands_default_output_directory_before_starting_extractors(self):
+        options = DesktopBridge._options_from_payload(
+            {
+                "mode": "page",
+                "url": "https://example.com/article",
+                "output_dir": "~/Documents/Extracted",
+            }
+        )
+
+        self.assertEqual(options.output_dir, str(DEFAULT_OUTPUT_DIR.resolve()))
+
     def test_builds_whole_book_options_from_frontend_payload(self):
         options = DesktopBridge._options_from_payload(
             {
