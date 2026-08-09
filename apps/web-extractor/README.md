@@ -10,7 +10,8 @@ The local React desktop app has dedicated **Web page**, **Whole site**, and
 **Whole book** workflows, responsive controls, light/dark/system themes, a
 visible verification handoff, progress, persistent per-workflow history, live
 activity logs, cancellation, and a shortcut to the output folder. Extraction
-stays on your computer.
+stays on your computer. New runs default to `~/Documents/Extracted`, and the
+folder picker can override that location for any workflow.
 
 Install the app and browser dependencies:
 
