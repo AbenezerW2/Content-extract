@@ -17,6 +17,7 @@ the combined workflows from one interface.
 - Extract chapter-based online books.
 - Extract one YouTube transcript or a playlist of up to 30 videos.
 - Save any workflow as plain text, Markdown, or JSON.
+- Export clean portable HTML or a full-page visual snapshot from the repository CLI.
 - Override automatically detected filenames when needed.
 - Reopen recent results from persistent, per-workflow history.
 
@@ -46,7 +47,7 @@ npm run build
 cd ../../..
 ```
 
-## Launch the desktop app
+## Launch the desktop app from source
 
 ```bash
 python app.py
@@ -64,6 +65,28 @@ For frontend development, run `npm run dev` inside
 python app.py --dev
 ```
 
+## Build the installable macOS app
+
+The repository now includes a production packaging pipeline. It compiles the
+React interface, bundles the Python extraction engine and Chromium, creates a
+native application icon, and produces a standalone `Content Extract.app`.
+
+On macOS, from the repository root:
+
+```bash
+chmod +x scripts/build_macos.sh
+./scripts/build_macos.sh
+open "dist/Content Extract.app"
+```
+
+The packaged app does not require the user to install Python, Node.js, or
+Playwright. Extraction history is stored in
+`~/Library/Application Support/Content Extract`, while generated documents
+continue to default to `~/Documents/Extracted`.
+
+The output is currently unsigned. For distribution outside your own Mac, sign
+the app with an Apple Developer ID and notarize it before publishing a DMG.
+
 ## Standalone command-line tools
 
 The original CLIs remain usable:
@@ -71,11 +94,17 @@ The original CLIs remain usable:
 ```bash
 python apps/web-extractor/crawler.py "https://example.com" --auto-name --format markdown
 python apps/web-extractor/crawler.py "https://example.com" --crawl-site --max-pages 30 --format json
+python apps/web-extractor/crawler.py "https://example.com" --auto-name --format html --html-mode clean
+python apps/web-extractor/crawler.py "https://example.com" --playwright --auto-name --format html --html-mode snapshot
 python apps/youtube-extractor/youtube_transcript_extractor.py "YOUTUBE_URL" --format markdown
 python apps/youtube-extractor/youtube_transcript_extractor.py "PLAYLIST_URL" --playlist --max-videos 30 --format json
 ```
 
 Run either command with `--help` for its complete options.
+
+HTML output is currently a repository/CLI feature and is not added to the
+desktop app. Clean HTML embeds ordinary images and applies a safe readable
+layout; snapshot HTML retains the complete fetched or rendered page structure.
 
 ## Responsible use
 

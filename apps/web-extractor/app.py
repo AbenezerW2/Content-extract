@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import runpy
 import subprocess
 import sys
 import threading
@@ -25,8 +26,28 @@ WORKSPACE_DIR = Path(os.environ.get("CONTENT_EXTRACT_ROOT", APP_DIR)).resolve()
 CRAWLER_PATH = APP_DIR / "crawler.py"
 YOUTUBE_EXTRACTOR_PATH = APP_DIR.parent / "youtube-extractor" / "youtube_transcript_extractor.py"
 FRONTEND_INDEX = APP_DIR / "frontend" / "dist" / "index.html"
-HISTORY_PATH = WORKSPACE_DIR / ".content-extract" / "history.json"
 DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "Extracted"
+
+
+def app_data_dir() -> Path:
+    """Return a durable per-user data folder for source and packaged builds."""
+    if not getattr(sys, "frozen", False):
+        return WORKSPACE_DIR / ".content-extract"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Content Extract"
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Content Extract"
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "content-extract"
+
+
+HISTORY_PATH = app_data_dir() / "history.json"
+
+
+def extractor_command(command: list[str], worker: str) -> list[str]:
+    """Route packaged jobs back through the bundled Python runtime."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--worker", worker, *command[2:]]
+    return command
 
 
 class DesktopBridge:
@@ -67,9 +88,11 @@ class DesktopBridge:
             if mode == "youtube":
                 options = self._youtube_options_from_payload(payload)
                 command = build_youtube_command(options, sys.executable, YOUTUBE_EXTRACTOR_PATH)
+                command = extractor_command(command, "youtube")
             else:
                 options = self._options_from_payload(payload)
                 command = build_crawler_command(options, sys.executable, CRAWLER_PATH)
+                command = extractor_command(command, "web")
         except (AppValidationError, TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -242,7 +265,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def run_worker(worker: str, worker_args: list[str]) -> int:
+    """Run a CLI extractor from the frozen desktop executable."""
+    script = CRAWLER_PATH if worker == "web" else YOUTUBE_EXTRACTOR_PATH
+    sys.argv = [str(script), *worker_args]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) >= 3 and sys.argv[1] == "--worker":
+        worker = sys.argv[2]
+        if worker not in {"web", "youtube"}:
+            print(f"Unknown extraction worker: {worker}", file=sys.stderr)
+            return 2
+        return run_worker(worker, sys.argv[3:])
+
     args = parse_args()
     if args.dev:
         frontend_url = "http://localhost:5173"

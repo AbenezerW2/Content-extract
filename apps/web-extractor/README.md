@@ -1,8 +1,8 @@
 # Web and Book Extractor
 
 Book Extractor turns public web pages and chapter-based online books into clean
-Markdown, JSON, or text. Use the desktop app for a guided workflow or keep using
-the command-line interface for scripts and advanced control.
+Markdown, JSON, text, or visual HTML. Use the desktop app for a guided workflow
+or keep using the command-line interface for scripts and advanced control.
 
 ## Desktop app
 
@@ -111,6 +111,42 @@ python crawler.py "https://example.com/chapter-7" --name "PHL 218 - Chapter 7" -
 python crawler.py "https://example.com/chapter-7" --name "PHL 218 - Chapter 7" --format json
 ```
 
+## Visual HTML output
+
+HTML is available from the repository CLI. It is intentionally not exposed in
+the desktop app yet. Clean mode keeps semantic page or post content, removes
+active embeds and site chrome, supplies a readable responsive design, and
+embeds ordinary raster images directly into the `.html` file:
+
+```bash
+python crawler.py "https://example.com/article" \
+  --auto-name \
+  --format html \
+  --html-mode clean \
+  --output-dir outputs
+```
+
+Snapshot mode preserves the full fetched or Playwright-rendered document,
+including its navigation, stylesheets, scripts, and theme structure. Its linked
+theme resources still require network access when the file is reopened:
+
+```bash
+python crawler.py "https://example.com" \
+  --playwright \
+  --auto-name \
+  --format html \
+  --html-mode snapshot
+```
+
+Images are embedded by default, subject to per-image and total size limits. Add
+`--no-embed-images` to keep absolute remote image URLs and produce smaller
+files. Clean mode removes scripts, forms, iframes, objects, and inline event
+handlers. Snapshot mode intentionally preserves active page content, so only
+open snapshots from sites you trust.
+
+WordPress archive pages are supported: posts wrapped in theme grid list items
+are treated as articles rather than mistaken for ordinary bullet-list content.
+
 Useful controls:
 
 ```bash
@@ -175,5 +211,5 @@ because fragments are locations inside the same downloaded page.
 - It does not log in, submit forms, retain cookies, or bypass authentication. Use an official API or obtain permission for protected data.
 - Whole-site mode follows only same-origin HTTP(S) page links, skips common binary/media files, and stops at 30 pages. Add a delay and respect published rate limits. HTTP 429 means slow down and honor `Retry-After`.
 - Only public HTTP(S) destinations are accepted. Localhost, private/link-local IPs, embedded URL credentials, excessive redirects, large responses, and non-HTML responses are rejected.
-- Site markup varies, so the generic JSON may need site-specific selectors. Images and links are listed, but binary files are not downloaded.
+- Site markup varies, so the generic JSON may need site-specific selectors. JSON, Markdown, and text list image URLs without downloading them; HTML can embed raster images.
 - DNS rebinding and browser subrequests are difficult to secure perfectly. Do not expose this script directly as a public web service without stronger network-level egress controls, request queues, quotas, and audit logging.

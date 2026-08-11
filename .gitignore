@@ -1,4 +1,5 @@
 .venv*/
+.venv-build/
 __pycache__/
 *.py[cod]
 .DS_Store
@@ -6,3 +7,6 @@ __pycache__/
 .content-extract/
 apps/web-extractor/frontend/node_modules/
 apps/web-extractor/frontend/dist/
+build/
+dist/
+*.spec.bak

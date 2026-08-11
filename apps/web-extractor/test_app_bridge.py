@@ -1,7 +1,8 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app import DEFAULT_OUTPUT_DIR, DesktopBridge
+from app import DEFAULT_OUTPUT_DIR, DesktopBridge, extractor_command
 
 
 class DesktopBridgeTests(unittest.TestCase):
@@ -104,6 +105,22 @@ class DesktopBridgeTests(unittest.TestCase):
 
         self.assertTrue(options.crawl_site)
         self.assertEqual(options.expected_outputs, 15)
+
+    def test_source_build_uses_python_script_command(self):
+        command = ["python", "/tmp/crawler.py", "https://example.com"]
+
+        self.assertEqual(extractor_command(command, "web"), command)
+
+    def test_frozen_build_routes_command_through_bundled_worker(self):
+        command = ["python", "/tmp/crawler.py", "https://example.com", "--format", "markdown"]
+
+        with patch("app.sys.frozen", True, create=True), patch("app.sys.executable", "/Applications/Content Extract"):
+            result = extractor_command(command, "web")
+
+        self.assertEqual(
+            result,
+            ["/Applications/Content Extract", "--worker", "web", "https://example.com", "--format", "markdown"],
+        )
 
 
 if __name__ == "__main__":

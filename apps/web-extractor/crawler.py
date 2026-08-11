@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from collections import deque
+import html as html_lib
 import ipaddress
 import json
 import re
@@ -24,6 +26,8 @@ from bs4 import BeautifulSoup
 USER_AGENT = "SimplePageExtractor/1.0 (+local educational tool)"
 MAX_REDIRECTS = 5
 MAX_SITE_PAGES = 30
+MAX_EMBEDDED_IMAGE_BYTES = 8_000_000
+MAX_EMBEDDED_IMAGES_BYTES = 40_000_000
 SKIPPED_LINK_EXTENSIONS = {
     ".7z",
     ".avi",
@@ -224,11 +228,11 @@ def clean_text(value: str) -> str:
 
 
 def named_output_path(name: str, output_dir: str, output_format: str = "json") -> Path:
-    """Return a filesystem-safe JSON path for a user-friendly study name."""
+    """Return a filesystem-safe output path for a user-friendly study name."""
     filename = re.sub(r"[^\w.-]+", "_", name.strip(), flags=re.UNICODE).strip("._")
     if not filename:
         raise CrawlerError("Output name must contain at least one letter or number")
-    extensions = {"json": ".json", "markdown": ".md", "text": ".txt"}
+    extensions = {"json": ".json", "markdown": ".md", "text": ".txt", "html": ".html"}
     extension = extensions[output_format]
     for known_extension in extensions.values():
         if filename.lower().endswith(known_extension):
@@ -236,6 +240,25 @@ def named_output_path(name: str, output_dir: str, output_format: str = "json") -
             break
     filename += extension
     return Path(output_dir).expanduser() / filename
+
+
+def content_roots(soup: BeautifulSoup) -> list[Any]:
+    """Choose semantic content roots without dropping WordPress archive posts."""
+    main = soup.find("main")
+    if main:
+        return [main]
+    articles = soup.find_all("article")
+    if articles:
+        return [article for article in articles if not article.find_parent("article")]
+    return [soup.body or soup]
+
+
+def is_page_chrome(tag: Any) -> bool:
+    """Return whether a content block belongs to site chrome rather than an article."""
+    if tag.find_parent(["nav", "footer", "aside"]):
+        return True
+    header = tag.find_parent("header")
+    return bool(header and not header.find_parent("article"))
 
 
 def extract(page: Page) -> dict[str, Any]:
@@ -266,27 +289,31 @@ def extract(page: Page) -> dict[str, Any]:
                 rows.append(cells)
         tables.append(rows)
 
-    content_root = soup.find("main") or soup.find("article") or soup.body or soup
     content_blocks = []
     block_names = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote", "pre"]
-    for tag in content_root.find_all(block_names):
-        if tag.find_parent(["nav", "header", "footer", "aside"]):
-            continue
-        if tag.name == "p" and tag.find_parent(["li", "blockquote"]):
-            continue
-        value = clean_text(tag.get_text(" ", strip=True))
-        if not value:
-            continue
-        if tag.name.startswith("h"):
-            content_blocks.append({"type": "heading", "level": int(tag.name[1]), "text": value})
-        elif tag.name == "li":
-            content_blocks.append({"type": "list_item", "text": value})
-        elif tag.name == "blockquote":
-            content_blocks.append({"type": "quote", "text": value})
-        elif tag.name == "pre":
-            content_blocks.append({"type": "preformatted", "text": tag.get_text("\n", strip=True)})
-        else:
-            content_blocks.append({"type": "paragraph", "text": value})
+    for content_root in content_roots(soup):
+        for tag in content_root.find_all(block_names):
+            if is_page_chrome(tag):
+                continue
+            nearest_structural_parent = tag.find_parent(["li", "article", "blockquote"])
+            if tag.name == "p" and nearest_structural_parent and nearest_structural_parent.name in {
+                "li",
+                "blockquote",
+            }:
+                continue
+            value = clean_text(tag.get_text(" ", strip=True))
+            if not value:
+                continue
+            if tag.name.startswith("h"):
+                content_blocks.append({"type": "heading", "level": int(tag.name[1]), "text": value})
+            elif tag.name == "li":
+                content_blocks.append({"type": "list_item", "text": value})
+            elif tag.name == "blockquote":
+                content_blocks.append({"type": "quote", "text": value})
+            elif tag.name == "pre":
+                content_blocks.append({"type": "preformatted", "text": tag.get_text("\n", strip=True)})
+            else:
+                content_blocks.append({"type": "paragraph", "text": value})
 
     return {
         "requested_url": page.requested_url,
@@ -341,11 +368,149 @@ def render_text(data: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_output(data: dict[str, Any], output_format: str) -> str:
+PORTABLE_HTML_STYLES = """
+:root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; background: #eef2f7; color: #172033; line-height: 1.7; }
+.document { width: min(900px, calc(100% - 2rem)); margin: 2rem auto; padding: clamp(1.25rem, 4vw, 3.5rem); box-sizing: border-box; background: #fff; border-radius: 20px; box-shadow: 0 20px 70px rgba(15, 23, 42, .12); }
+.source { margin-bottom: 2rem; color: #64748b; font-size: .9rem; overflow-wrap: anywhere; }
+article + article { margin-top: 3rem; padding-top: 3rem; border-top: 1px solid #dbe3ee; }
+img, video, svg { display: block; max-width: 100%; height: auto; margin: 1.5rem auto; border-radius: 12px; }
+figure { margin: 1.5rem 0; } figcaption { color: #64748b; font-size: .9rem; text-align: center; }
+a { color: #1769e0; } pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
+pre { padding: 1rem; border-radius: 10px; background: #0f172a; color: #e2e8f0; overflow-x: auto; }
+blockquote { margin-left: 0; padding-left: 1.25rem; border-left: 4px solid #3b82f6; color: #475569; }
+table { width: 100%; border-collapse: collapse; overflow-x: auto; } th, td { padding: .65rem; border: 1px solid #cbd5e1; text-align: left; }
+@media (prefers-color-scheme: dark) { body { background: #080d16; color: #e5edf8; } .document { background: #111827; box-shadow: none; } .source, figcaption, blockquote { color: #a7b4c7; } a { color: #70a7ff; } th, td { border-color: #334155; } }
+""".strip()
+
+
+def absolute_resource_urls(soup: BeautifulSoup, base_url: str) -> None:
+    for tag, attribute in (("a", "href"), ("img", "src"), ("video", "src"), ("source", "src")):
+        for element in soup.find_all(tag):
+            value = element.get(attribute)
+            if value:
+                element[attribute] = urljoin(base_url, value)
+
+
+def embed_images(soup: BeautifulSoup, base_url: str, timeout: float) -> None:
+    total_bytes = 0
+    session = requests.Session()
+    session.headers["User-Agent"] = USER_AGENT
+    for image in soup.find_all("img", src=True):
+        source = urljoin(base_url, image["src"])
+        if source.startswith("data:"):
+            continue
+        response = None
+        try:
+            current = source
+            for _ in range(MAX_REDIRECTS + 1):
+                validate_public_url(current)
+                response = session.get(current, timeout=timeout, stream=True, allow_redirects=False)
+                if response.is_redirect or response.is_permanent_redirect:
+                    location = response.headers.get("Location")
+                    response.close()
+                    response = None
+                    if not location:
+                        raise CrawlerError("Image redirect did not include a Location")
+                    current = urljoin(current, location)
+                    continue
+                break
+            if response is None:
+                raise CrawlerError(f"Too many image redirects (maximum {MAX_REDIRECTS})")
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            if not content_type.startswith("image/") or content_type == "image/svg+xml":
+                continue
+            chunks: list[bytes] = []
+            image_bytes = 0
+            for chunk in response.iter_content(64 * 1024):
+                image_bytes += len(chunk)
+                if image_bytes > MAX_EMBEDDED_IMAGE_BYTES:
+                    chunks = []
+                    break
+                chunks.append(chunk)
+            if not chunks or total_bytes + image_bytes > MAX_EMBEDDED_IMAGES_BYTES:
+                continue
+            total_bytes += image_bytes
+            encoded = base64.b64encode(b"".join(chunks)).decode("ascii")
+            image["src"] = f"data:{content_type};base64,{encoded}"
+            image.attrs.pop("srcset", None)
+            image.attrs.pop("sizes", None)
+        except (CrawlerError, OSError, requests.RequestException):
+            image["src"] = source
+        finally:
+            if response is not None:
+                response.close()
+
+
+def render_html(
+    page: Page,
+    mode: str = "clean",
+    *,
+    embed_page_images: bool = True,
+    timeout: float = 15,
+) -> str:
+    """Render clean portable HTML or a full-page visual snapshot."""
+    soup = BeautifulSoup(page.html, "html.parser")
+    if mode == "snapshot":
+        head = soup.head
+        if head is None:
+            head = soup.new_tag("head")
+            (soup.html or soup).insert(0, head)
+        existing_base = head.find("base")
+        if existing_base:
+            existing_base["href"] = page.final_url
+        else:
+            base = soup.new_tag("base", href=page.final_url)
+            head.insert(0, base)
+        absolute_resource_urls(soup, page.final_url)
+        if embed_page_images:
+            embed_images(soup, page.final_url, timeout)
+        return "<!doctype html>\n" + str(soup)
+
+    for tag in soup(["script", "style", "noscript", "template", "iframe", "object", "embed", "form"]):
+        tag.decompose()
+    roots = content_roots(soup)
+    for root in roots:
+        for chrome in root.find_all(["nav", "footer", "aside"]):
+            chrome.decompose()
+        for element in root.find_all(True):
+            for attribute in list(element.attrs):
+                if attribute.lower().startswith("on"):
+                    del element.attrs[attribute]
+    fragment_soup = BeautifulSoup("".join(str(root) for root in roots), "html.parser")
+    absolute_resource_urls(fragment_soup, page.final_url)
+    if embed_page_images:
+        embed_images(fragment_soup, page.final_url, timeout)
+    title = clean_text(soup.title.get_text()) if soup.title else "Extracted page"
+    safe_title = html_lib.escape(title)
+    safe_url = html_lib.escape(page.final_url, quote=True)
+    return (
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{safe_title}</title><style>{PORTABLE_HTML_STYLES}</style></head><body>"
+        f'<main class="document"><h1>{safe_title}</h1><p class="source">Source: '
+        f'<a href="{safe_url}">{safe_url}</a></p>{fragment_soup}</main></body></html>\n'
+    )
+
+
+def render_output(
+    data: dict[str, Any],
+    output_format: str,
+    *,
+    page: Page | None = None,
+    html_mode: str = "clean",
+    embed_page_images: bool = True,
+    timeout: float = 15,
+) -> str:
     if output_format == "markdown":
         return render_markdown(data)
     if output_format == "text":
         return render_text(data)
+    if output_format == "html":
+        if page is None:
+            raise CrawlerError("HTML output requires the fetched page")
+        return render_html(page, html_mode, embed_page_images=embed_page_images, timeout=timeout)
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
@@ -389,6 +554,17 @@ def crawl_site(
     delay: float = 0,
 ) -> Iterator[dict[str, Any]]:
     """Breadth-first crawl of same-origin pages, bounded to at most 30 outputs."""
+    for _page, data in crawl_site_pages(start_url, max_pages, fetcher, delay):
+        yield data
+
+
+def crawl_site_pages(
+    start_url: str,
+    max_pages: int,
+    fetcher: Callable[[str], Page],
+    delay: float = 0,
+) -> Iterator[tuple[Page, dict[str, Any]]]:
+    """Yield fetched pages with their data for formats that need original HTML."""
     if not 1 <= max_pages <= MAX_SITE_PAGES:
         raise CrawlerError(f"Site crawl limit must be between 1 and {MAX_SITE_PAGES}")
     start_url = urldefrag(start_url)[0]
@@ -401,13 +577,14 @@ def crawl_site(
             continue
         attempted.add(url)
         try:
-            data = extract(fetcher(url))
+            page = fetcher(url)
+            data = extract(page)
         except (CrawlerError, OSError, requests.RequestException) as exc:
             if not completed:
                 raise
             print(f"warning: skipped {url}: {exc}", file=sys.stderr)
             continue
-        yield data
+        yield page, data
         completed += 1
         queued = set(queue)
         for link in same_site_links(data, start_url):
@@ -494,6 +671,11 @@ def save_named_output(
     output_format: str,
     overwrite: bool,
     keep_both: bool = False,
+    *,
+    page: Page | None = None,
+    html_mode: str = "clean",
+    embed_page_images: bool = True,
+    timeout: float = 15,
 ) -> Path:
     output_path = named_output_path(name, output_dir, output_format)
     if output_path.exists() and not overwrite:
@@ -505,7 +687,17 @@ def save_named_output(
             output_path = named_output_path(base_name, output_dir, output_format)
             counter += 1
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_output(data, output_format), encoding="utf-8")
+    output_path.write_text(
+        render_output(
+            data,
+            output_format,
+            page=page,
+            html_mode=html_mode,
+            embed_page_images=embed_page_images,
+            timeout=timeout,
+        ),
+        encoding="utf-8",
+    )
     return output_path
 
 
@@ -522,9 +714,20 @@ def main() -> int:
     )
     parser.add_argument(
         "--format",
-        choices=("json", "markdown", "text"),
+        choices=("json", "markdown", "text", "html"),
         default="json",
         help="Output format (default: json)",
+    )
+    parser.add_argument(
+        "--html-mode",
+        choices=("clean", "snapshot"),
+        default="clean",
+        help="For HTML: clean portable article or full rendered-page snapshot (default: clean)",
+    )
+    parser.add_argument(
+        "--no-embed-images",
+        action="store_true",
+        help="For HTML: keep absolute image URLs instead of embedding images in the file",
     )
     parser.add_argument("--output-dir", default="outputs", help="Folder for --name outputs (default: outputs)")
     parser.add_argument("--overwrite", action="store_true", help="Allow replacing an existing named output")
@@ -596,7 +799,7 @@ def main() -> int:
                 return page
 
             completed = 0
-            for data in crawl_site(args.url, args.max_pages, fetcher, args.delay):
+            for page, data in crawl_site_pages(args.url, args.max_pages, fetcher, args.delay):
                 automatic_name = suggested_page_name(data)
                 output_name = f"{args.name} - {automatic_name}" if args.name else automatic_name
                 path = save_named_output(
@@ -606,6 +809,10 @@ def main() -> int:
                     args.format,
                     args.overwrite,
                     keep_both=not args.overwrite,
+                    page=page,
+                    html_mode=args.html_mode,
+                    embed_page_images=not args.no_embed_images,
+                    timeout=args.timeout,
                 )
                 print(f"saved: {path.resolve()}")
                 completed += 1
@@ -626,6 +833,10 @@ def main() -> int:
                     args.output_dir,
                     args.format,
                     args.overwrite,
+                    page=page,
+                    html_mode=args.html_mode,
+                    embed_page_images=not args.no_embed_images,
+                    timeout=args.timeout,
                 )
                 print(f"saved: {path.resolve()}")
                 completed += 1
@@ -637,7 +848,14 @@ def main() -> int:
         else:
             page = fetch_requests(args.url, args.timeout, args.max_bytes)
         data = extract(page)
-        result = render_output(data, args.format)
+        result = render_output(
+            data,
+            args.format,
+            page=page,
+            html_mode=args.html_mode,
+            embed_page_images=not args.no_embed_images,
+            timeout=args.timeout,
+        )
         output_name = args.name or (suggested_page_name(data) if args.auto_name else None)
         output_path = named_output_path(output_name, args.output_dir, args.format) if output_name else Path(args.output).expanduser() if args.output else None
         if output_path:

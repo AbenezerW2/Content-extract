@@ -10,6 +10,7 @@ from crawler import (
     looks_like_verification_page,
     named_output_path,
     render_markdown,
+    render_html,
     render_text,
     robots_allows,
     same_site_links,
@@ -62,6 +63,10 @@ class ExtractTests(unittest.TestCase):
             str(named_output_path("PHL 218 - Chapter 7.json", "outputs", "markdown")),
             "outputs/PHL_218_-_Chapter_7.md",
         )
+        self.assertEqual(
+            str(named_output_path("Visual notes.md", "outputs", "html")),
+            "outputs/Visual_notes.html",
+        )
 
     def test_rejects_empty_named_output(self):
         with self.assertRaises(CrawlerError):
@@ -113,6 +118,57 @@ class ExtractTests(unittest.TestCase):
         self.assertIn("- First consideration", markdown)
         self.assertIn("KEY TERMS", text)
         self.assertIn("A useful definition.", text)
+
+    def test_wordpress_archive_keeps_posts_wrapped_in_list_items(self):
+        html = """<html><head><title>Blog</title></head><body><ul class="blog-grid"><li>
+        <article class="post"><header><h2>First post</h2></header>
+        <div class="post-content"><p>First excerpt.</p></div></article></li><li>
+        <article class="post"><header><h2>Second post</h2></header>
+        <div class="post-content"><p>Second excerpt.</p></div></article></li></ul></body></html>"""
+
+        data = extract(Page("https://example.com/blog", "https://example.com/blog", 200, "text/html", html))
+
+        self.assertEqual(
+            [block["text"] for block in data["content_blocks"]],
+            ["First post", "First excerpt.", "Second post", "Second excerpt."],
+        )
+
+    def test_clean_html_preserves_visual_content_and_removes_active_content(self):
+        page = Page(
+            "https://example.com/blog",
+            "https://example.com/blog",
+            200,
+            "text/html",
+            """<html><head><title>Visual post</title><script>bad()</script></head><body>
+            <nav>Menu</nav><article><h2>Post title</h2><p>Post body.</p>
+            <img src="/media/chart.png" alt="Chart"><iframe src="https://tracker.example"></iframe>
+            </article></body></html>""",
+        )
+
+        result = render_html(page, "clean", embed_page_images=False)
+
+        self.assertIn("Post title", result)
+        self.assertIn("Post body.", result)
+        self.assertIn('src="https://example.com/media/chart.png"', result)
+        self.assertIn(".document", result)
+        self.assertNotIn("bad()", result)
+        self.assertNotIn("<iframe", result)
+        self.assertNotIn(">Menu<", result)
+
+    def test_snapshot_html_keeps_page_structure_and_adds_base_url(self):
+        page = Page(
+            "https://example.com/start",
+            "https://example.com/final/",
+            200,
+            "text/html",
+            "<html><head><title>Snapshot</title></head><body><nav>Menu</nav><script>ready()</script></body></html>",
+        )
+
+        result = render_html(page, "snapshot", embed_page_images=False)
+
+        self.assertIn('<base href="https://example.com/final/"/>', result)
+        self.assertIn("<nav>Menu</nav>", result)
+        self.assertIn("<script>ready()</script>", result)
 
     def test_generates_book_chapter_urls(self):
         urls = chapter_urls("https://books.example/10/book/", 1, 3)
