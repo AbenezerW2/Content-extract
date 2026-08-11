@@ -3,6 +3,7 @@ import {
   Check,
   ChevronRight,
   CircleStop,
+  Contrast,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -21,7 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import binaryBooksArt from "@/assets/binary-books.png"
 import youtubeExtractionArt from "@/assets/youtube-extraction.png"
-import { HexagonPattern } from "@/components/ui/hexagon-pattern"
+import { GlassSurface } from "@/components/ui/glass-surface"
+import { GlyphMatrix } from "@/components/ui/glyph-matrix"
 import {
   WebPageWorkflowIcon,
 } from "@/components/workflow-icons"
@@ -38,8 +40,11 @@ import { cn } from "@/lib/utils"
 
 type Mode = "page" | "site" | "book" | "youtube"
 type Workflow = "web" | "book" | "youtube"
-type Theme = "light" | "dark" | "system"
-type OutputFormat = "markdown" | "json" | "text"
+type Theme = "light" | "dark" | "black" | "system"
+
+const MAX_ACTIVITY_CHARS = 200_000
+type OutputFormat = "markdown" | "json" | "text" | "html"
+type HtmlMode = "clean" | "snapshot"
 
 type ExtractionForm = {
   mode: Mode
@@ -47,6 +52,8 @@ type ExtractionForm = {
   name: string
   outputDir: string
   format: OutputFormat
+  htmlMode: HtmlMode
+  embedImages: boolean
   startChapter: number
   endChapter: number
   bookMultiple: boolean
@@ -107,6 +114,8 @@ const initialForm: ExtractionForm = {
   name: "",
   outputDir: "~/Documents/Extracted",
   format: "markdown",
+  htmlMode: "clean",
+  embedImages: true,
   startChapter: 1,
   endChapter: 12,
   bookMultiple: true,
@@ -134,7 +143,13 @@ const modeDetails: Record<Mode, { title: string; description: string; unit: stri
 
 function App() {
   const [form, setForm] = useState<ExtractionForm>(initialForm)
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("content-extract-theme") as Theme) || "system")
+  const [theme, setTheme] = useState<Theme>(() => {
+    const storedTheme = localStorage.getItem("content-extract-theme")
+    return storedTheme === "light" || storedTheme === "dark" || storedTheme === "black" || storedTheme === "system"
+      ? storedTheme
+      : "system"
+  })
+  const [prefersDark, setPrefersDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches)
   const [running, setRunning] = useState(false)
   const [verificationNeeded, setVerificationNeeded] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
@@ -143,6 +158,8 @@ function App() {
   const [error, setError] = useState("")
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const cursorRef = useRef(0)
+  const isDark = theme === "dark" || theme === "black" || (theme === "system" && prefersDark)
+  const isBlack = theme === "black"
   const modeDetail = form.mode === "book"
     ? form.bookMultiple
       ? { title: "Multiple-chapter extraction", description: "Extract a numbered chapter range in one browser session.", unit: "chapters" }
@@ -172,8 +189,18 @@ function App() {
   }, [form.mode])
 
   const consumeEvents = useCallback((events: BridgeEvent[]) => {
+    const output = events
+      .filter((event) => event.type === "output" && event.text)
+      .map((event) => event.text)
+      .join("")
+    if (output) {
+      setLogs((current) => {
+        const combined = `${current.join("")}${output}`
+        return [combined.slice(-MAX_ACTIVITY_CHARS)]
+      })
+    }
+
     for (const event of events) {
-      if (event.type === "output" && event.text) setLogs((current) => [...current, event.text!])
       if (event.type === "saved") {
         setSavedCount((count) => count + 1)
         setStatus(form.mode === "book" ? "Extracting chapters" : form.mode === "site" ? "Crawling site pages" : form.mode === "youtube" ? "Saving transcript" : "Saving page")
@@ -199,32 +226,51 @@ function App() {
   }, [safeExpectedOutputs, form.mode, refreshHistory])
 
   useEffect(() => {
-    localStorage.setItem("content-extract-theme", theme)
     const media = window.matchMedia("(prefers-color-scheme: dark)")
-    const applyTheme = () => {
-      const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme
-      document.documentElement.classList.toggle("dark", resolved === "dark")
-      document.documentElement.style.colorScheme = resolved
-    }
-    applyTheme()
-    media.addEventListener("change", applyTheme)
-    return () => media.removeEventListener("change", applyTheme)
-  }, [theme])
+    const updatePreference = () => setPrefersDark(media.matches)
+    media.addEventListener("change", updatePreference)
+    return () => media.removeEventListener("change", updatePreference)
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("content-extract-theme", theme)
+    document.documentElement.classList.toggle("dark", isDark)
+    document.documentElement.classList.toggle("black-theme", isBlack)
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light"
+  }, [isBlack, isDark, theme])
 
   useEffect(() => {
     if (!running || !window.pywebview?.api) return
-    const timer = window.setInterval(async () => {
+    let cancelled = false
+    let timer: number | undefined
+
+    const poll = async () => {
       try {
         const update = await window.pywebview!.api.get_status(cursorRef.current)
+        if (cancelled) return
         cursorRef.current = update.cursor
         consumeEvents(update.events)
-        if (!update.running && update.exitCode !== null) setRunning(false)
+        if (!update.running && update.exitCode !== null) {
+          setRunning(false)
+          return
+        }
       } catch (pollError) {
+        if (cancelled) return
         setError(String(pollError))
         setRunning(false)
+        return
       }
-    }, 300)
-    return () => window.clearInterval(timer)
+
+      // Schedule only after the current bridge call completes so a busy
+      // Windows UI thread can never accumulate overlapping COM requests.
+      timer = window.setTimeout(() => void poll(), 500)
+    }
+
+    timer = window.setTimeout(() => void poll(), 0)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
   }, [consumeEvents, running])
 
   useEffect(() => {
@@ -330,6 +376,8 @@ function App() {
       name: form.name,
       output_dir: form.outputDir,
       output_format: form.format,
+      html_mode: form.htmlMode,
+      embed_images: form.embedImages,
       start_chapter: form.startChapter,
       end_chapter: form.endChapter,
       delay: form.delay,
@@ -380,21 +428,19 @@ function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-slate-100 text-slate-950 transition-colors duration-500 dark:bg-[#070b12] dark:text-white">
-      <HexagonPattern
-        hexagons={[
-          [1, 1],
-          [4, 4],
-          [2, 2],
-          [3, 4],
-          [5, 4],
-          [8, 2],
-          [6, 3],
-          [8, 5],
-          [10, 10],
-        ]}
-        strokeWidth={1.15}
-        className="fixed inset-0 z-0 h-screen w-screen skew-y-6 mask-[radial-gradient(1000px_circle_at_50%_38%,white,transparent)] dark:fill-blue-400/10 dark:stroke-blue-300/28"
+    <div className={cn(
+      "relative min-h-screen overflow-hidden text-slate-950 transition-colors duration-500 dark:text-white",
+      isBlack ? "bg-black" : "bg-white dark:bg-[#070b12]",
+    )}>
+      <GlyphMatrix
+        glyphs="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        cellSize={18}
+        mutationRate={0.04}
+        interval={80}
+        driftSpeed={16}
+        fadeBottom={0.55}
+        color={isDark ? "#ffffff" : "#000000"}
+        className="fixed inset-0 z-0 h-screen w-screen opacity-55"
       />
 
       <main className="relative z-10 mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
@@ -439,7 +485,23 @@ function App() {
 
         <ModePicker mode={form.mode} onChange={setWorkflow} />
 
-        <motion.section layout transition={spring} className="glass-card mt-5 p-5 sm:p-7 lg:p-8">
+        <GlassSurface
+          width="100%"
+          height="auto"
+          borderRadius={28}
+          borderWidth={0.06}
+          brightness={68}
+          blur={8}
+          displace={0.45}
+          distortionScale={-28}
+          redOffset={0}
+          greenOffset={2}
+          blueOffset={4}
+          backgroundOpacity={isDark ? 0.58 : 0.52}
+          saturation={1.45}
+          className="mt-5 border border-white/75 dark:border-white/15"
+        >
+        <motion.section layout transition={spring} className="w-full p-5 sm:p-7 lg:p-8">
           <div className="mb-7 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-extrabold tracking-tight">
@@ -540,8 +602,25 @@ function App() {
                 <option value="markdown">Markdown (.md)</option>
                 <option value="json">JSON (.json)</option>
                 <option value="text">Plain text (.txt)</option>
+                {form.mode !== "youtube" && <option value="html">Web page (.html)</option>}
               </select>
             </Field>
+
+            {form.mode !== "youtube" && form.format === "html" && (
+              <>
+                <Field label="HTML capture">
+                  <select className="control appearance-none" value={form.htmlMode} onChange={(event) => updateForm("htmlMode", event.target.value as HtmlMode)}>
+                    <option value="clean">Clean portable page</option>
+                    <option value="snapshot">Original-site snapshot</option>
+                  </select>
+                </Field>
+                <p className="rounded-xl border border-blue-200/70 bg-blue-50/70 px-4 py-3 text-xs leading-5 text-slate-600 md:col-span-2 dark:border-blue-400/15 dark:bg-blue-400/[0.06] dark:text-slate-400">
+                  {form.htmlMode === "snapshot"
+                    ? "Preserves site styles and scripts. Linked resources may need internet access; enable Render JavaScript for dynamic sites and open snapshots only from sites you trust."
+                    : "Removes active site content and applies a portable reading layout suitable for reopening offline."}
+                </p>
+              </>
+            )}
 
             {form.mode === "youtube" ? (
               <>
@@ -574,6 +653,7 @@ function App() {
                   <Toggle label="Render JavaScript" checked={form.mode === "book" || form.playwright} disabled={form.mode === "book"} onChange={setPlaywright} />
                   <Toggle label="Show browser" checked={form.headed} disabled={form.mode !== "book" && !form.playwright} onChange={setHeaded} />
                   <Toggle label="Wait for verification" checked={form.waitForUser} disabled={!form.headed || (form.mode !== "book" && !form.playwright)} onChange={(checked) => updateForm("waitForUser", checked)} />
+                  {form.format === "html" && <Toggle label="Embed page images" checked={form.embedImages} onChange={(checked) => updateForm("embedImages", checked)} />}
                 </>
               )}
               <Toggle label="Overwrite files" checked={form.overwrite} onChange={(checked) => updateForm("overwrite", checked)} />
@@ -611,11 +691,14 @@ function App() {
             </div>
           </div>
         </motion.section>
+        </GlassSurface>
 
         <AnimatePresence>
           {(running || savedCount > 0) && (
-            <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="glass-card mt-5 overflow-hidden p-5">
-              <div className="flex items-center gap-4">
+            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-5">
+              <GlassSurface width="100%" height="auto" borderRadius={28} distortionScale={-24} greenOffset={2} blueOffset={4} backgroundOpacity={isDark ? 0.58 : 0.52} saturation={1.45} className="border border-white/75 dark:border-white/15">
+              <section className="w-full p-5">
+                <div className="flex items-center gap-4">
                 <div className={cn("grid size-10 shrink-0 place-items-center rounded-xl", verificationNeeded ? "bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300" : "bg-blue-100 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300")}>
                   {running ? <LoaderCircle className="animate-spin" size={19} /> : <Check size={19} />}
                 </div>
@@ -633,8 +716,10 @@ function App() {
                     Verification complete
                   </motion.button>
                 )}
-              </div>
-            </motion.section>
+                </div>
+              </section>
+              </GlassSurface>
+            </motion.div>
           )}
         </AnimatePresence>
 
@@ -672,34 +757,51 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (workflow: Workf
       {options.map((option) => {
         const selected = option.id === "web" ? mode === "page" || mode === "site" : mode === option.id
         return (
-          <motion.button
+          <motion.div
             key={option.id}
             layout
             whileHover={{ y: -3 }}
             whileTap={{ scale: 0.985 }}
             transition={spring}
-            onClick={() => onChange(option.id)}
-            className={cn(
-              "relative min-h-32 overflow-hidden rounded-2xl border p-4 text-left shadow-lg backdrop-blur-[24px] backdrop-saturate-150 transition-all sm:p-5",
-              selected
-                ? "border-blue-300/70 bg-blue-600/76 text-white shadow-blue-900/20"
-                : "border-white/75 bg-white/24 text-slate-900 shadow-slate-900/8 hover:border-blue-300/70 hover:bg-white/34 dark:border-white/14 dark:bg-white/[0.018] dark:text-white dark:shadow-black/25 dark:hover:border-blue-400/35 dark:hover:bg-white/[0.045]",
-            )}
           >
-            {selected && <motion.div layoutId="mode-glow" className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.22),transparent_38%)]" />}
-            <div className="relative flex items-start gap-4">
-              <div className={cn("grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl border p-1.5 shadow-sm", selected ? "border-white/40 bg-white/96" : "border-white/75 bg-white/74 dark:border-white/10 dark:bg-slate-900/70")}>
-                {option.visual}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-extrabold">{option.title}</p>
-                  <ChevronRight className={selected ? "opacity-100" : "opacity-30"} size={17} />
+            <GlassSurface
+              width="100%"
+              height="100%"
+              borderRadius={16}
+              borderWidth={0.09}
+              brightness={68}
+              blur={8}
+              displace={0.35}
+              distortionScale={-22}
+              greenOffset={2}
+              blueOffset={4}
+              backgroundOpacity={selected ? 0.12 : 0.48}
+              saturation={1.55}
+              className={cn(
+                "min-h-32 border shadow-lg transition-all",
+                selected
+                  ? "border-blue-300/70 text-white shadow-blue-900/20"
+                  : "border-white/75 text-slate-900 shadow-slate-900/8 hover:border-blue-300/70 dark:border-white/14 dark:text-white dark:shadow-black/25 dark:hover:border-blue-400/35",
+              )}
+              style={selected ? { backgroundColor: "rgb(37 99 235 / 0.82)" } : undefined}
+            >
+              <button type="button" onClick={() => onChange(option.id)} className="relative min-h-32 w-full p-4 text-left sm:p-5">
+                {selected && <motion.div layoutId="mode-glow" className="absolute inset-0 bg-[radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.25),transparent_40%)]" />}
+                <div className="relative flex items-start gap-4">
+                  <div className={cn("grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl border p-1.5 shadow-sm", selected ? "border-white/40 bg-white/96" : "border-white/75 bg-white/74 dark:border-white/10 dark:bg-slate-900/70")}>
+                    {option.visual}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-extrabold">{option.title}</p>
+                      <ChevronRight className={selected ? "opacity-100" : "opacity-30"} size={17} />
+                    </div>
+                    <p className={cn("mt-1 text-sm leading-5", selected ? "text-blue-100" : "text-slate-500 dark:text-slate-400")}>{option.description}</p>
+                  </div>
                 </div>
-                <p className={cn("mt-1 text-sm leading-5", selected ? "text-blue-100" : "text-slate-500 dark:text-slate-400")}>{option.description}</p>
-              </div>
-            </div>
-          </motion.button>
+              </button>
+            </GlassSurface>
+          </motion.div>
         )
       })}
     </div>
@@ -775,11 +877,16 @@ function Toggle({ label, checked, disabled = false, onChange }: { label: string;
 }
 
 function ThemeSwitcher({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
-  const choices = [{ id: "light" as const, icon: Sun }, { id: "system" as const, icon: Laptop }, { id: "dark" as const, icon: Moon }]
+  const choices = [
+    { id: "light" as const, icon: Sun, label: "Light" },
+    { id: "system" as const, icon: Laptop, label: "System" },
+    { id: "dark" as const, icon: Moon, label: "Midnight blue" },
+    { id: "black" as const, icon: Contrast, label: "Black" },
+  ]
   return (
     <div className="flex rounded-xl border border-slate-200 bg-white/80 p-1 shadow-sm backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.055]">
-      {choices.map(({ id, icon: Icon }) => (
-        <button key={id} onClick={() => onChange(id)} className={cn("relative grid size-8 place-items-center rounded-lg text-slate-500 transition dark:text-slate-400", theme === id && "text-slate-950 dark:text-white")} title={`${id[0].toUpperCase()}${id.slice(1)} theme`}>
+      {choices.map(({ id, icon: Icon, label }) => (
+        <button key={id} onClick={() => onChange(id)} className={cn("relative grid size-8 place-items-center rounded-lg text-slate-500 transition dark:text-slate-400", theme === id && "text-slate-950 dark:text-white")} title={`${label} theme`} aria-label={`${label} theme`}>
           {theme === id && <motion.span layoutId="theme-pill" className="absolute inset-0 rounded-lg bg-slate-100 shadow-sm dark:bg-white/10" transition={spring} />}
           <Icon className="relative" size={15} />
         </button>
@@ -797,7 +904,7 @@ function ActivityDialog({ logs, status, savedCount, expectedOutputs }: { logs: s
         <span><span className="block text-xs font-extrabold">Activity</span><span className="block text-[0.68rem] text-slate-500 dark:text-slate-400">{savedCount} of {expectedOutputs} saved</span></span>
       </MorphingDialogTrigger>
       <MorphingDialogContainer>
-        <MorphingDialogContent className="relative mx-4 w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">
+        <MorphingDialogContent className="relative max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">
           <MorphingDialogTitle className="flex items-center gap-3 pr-10">
             <div className="grid size-10 place-items-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300"><FileText size={18} /></div>
             <div><h3 className="text-lg font-extrabold">Extraction activity</h3><p className="text-sm text-slate-500 dark:text-slate-400">{status}</p></div>
@@ -820,7 +927,7 @@ function HistoryDialog({ entries, mode, onRefresh }: { entries: HistoryEntry[]; 
         <span><span className="block text-xs font-extrabold">History</span><span className="block text-[0.68rem] text-slate-500 dark:text-slate-400">{entries.length} recent {mode} runs</span></span>
       </MorphingDialogTrigger>
       <MorphingDialogContainer>
-        <MorphingDialogContent className="relative mx-4 w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">
+        <MorphingDialogContent className="relative max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">
           <MorphingDialogTitle className="flex items-center gap-3 pr-10">
             <div className="grid size-10 place-items-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-400/10 dark:text-blue-300"><History size={18} /></div>
             <div className="flex-1"><h3 className="text-lg font-extrabold">{modeDetails[mode].title} history</h3><p className="text-sm text-slate-500 dark:text-slate-400">Saved locally on this computer</p></div>

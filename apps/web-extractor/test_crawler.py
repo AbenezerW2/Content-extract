@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from crawler import (
@@ -52,20 +53,20 @@ class ExtractTests(unittest.TestCase):
 
     def test_builds_safe_named_output_path(self):
         path = named_output_path("PHL 218 / Chapter 7", "outputs")
-        self.assertEqual(str(path), "outputs/PHL_218_Chapter_7.json")
+        self.assertEqual(path, Path("outputs") / "PHL_218_Chapter_7.json")
 
     def test_named_output_accepts_json_extension(self):
         path = named_output_path("week-1.json", "study")
-        self.assertEqual(str(path), "study/week-1.json")
+        self.assertEqual(path, Path("study") / "week-1.json")
 
     def test_named_output_uses_format_extension(self):
         self.assertEqual(
-            str(named_output_path("PHL 218 - Chapter 7.json", "outputs", "markdown")),
-            "outputs/PHL_218_-_Chapter_7.md",
+            named_output_path("PHL 218 - Chapter 7.json", "outputs", "markdown"),
+            Path("outputs") / "PHL_218_-_Chapter_7.md",
         )
         self.assertEqual(
-            str(named_output_path("Visual notes.md", "outputs", "html")),
-            "outputs/Visual_notes.html",
+            named_output_path("Visual notes.md", "outputs", "html"),
+            Path("outputs") / "Visual_notes.html",
         )
 
     def test_rejects_empty_named_output(self):

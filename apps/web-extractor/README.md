@@ -113,10 +113,11 @@ python crawler.py "https://example.com/chapter-7" --name "PHL 218 - Chapter 7" -
 
 ## Visual HTML output
 
-HTML is available from the repository CLI. It is intentionally not exposed in
-the desktop app yet. Clean mode keeps semantic page or post content, removes
-active embeds and site chrome, supplies a readable responsive design, and
-embeds ordinary raster images directly into the `.html` file:
+HTML is available from both the desktop app and repository CLI. In the app,
+choose **Web page (.html)** and then select **Clean portable page** or
+**Original-site snapshot**. Clean mode keeps semantic page or post content,
+removes active embeds and site chrome, supplies a readable responsive design,
+and embeds ordinary raster images directly into the `.html` file:
 
 ```bash
 python crawler.py "https://example.com/article" \

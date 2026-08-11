@@ -35,11 +35,37 @@ requirements.txt      Unified Python installation
 
 Python 3.10 or newer and Node.js 20 or newer are recommended.
 
+### Windows PowerShell
+
+Use the Windows Python launcher (`py`) to create the environment, then run
+Playwright through that environment so Chromium is installed for the same
+Python interpreter as the app:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+
+Push-Location apps\web-extractor\frontend
+npm install
+npm run build
+Pop-Location
+
+python app.py
+```
+
+Run the npm commands inside `apps\web-extractor\frontend`; the repository root
+does not contain the frontend package.
+
+### macOS and Linux
+
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate              # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 python -m pip install -r requirements.txt
-playwright install chromium
+python -m playwright install chromium
 
 cd apps/web-extractor/frontend
 npm install
@@ -102,9 +128,9 @@ python apps/youtube-extractor/youtube_transcript_extractor.py "PLAYLIST_URL" --p
 
 Run either command with `--help` for its complete options.
 
-HTML output is currently a repository/CLI feature and is not added to the
-desktop app. Clean HTML embeds ordinary images and applies a safe readable
-layout; snapshot HTML retains the complete fetched or rendered page structure.
+HTML output is available in both the desktop app and repository CLI. Clean HTML
+embeds ordinary images and applies a safe readable layout; snapshot HTML retains
+the complete fetched or rendered page structure.
 
 ## Responsible use
 

@@ -47,6 +47,26 @@ class AppModelTests(unittest.TestCase):
         self.assertEqual(command[command.index("--name") + 1], "Chapter notes")
         self.assertEqual(options.expected_outputs, 1)
 
+    def test_builds_snapshot_html_command_without_embedded_images(self):
+        options = ExtractionOptions(
+            url="https://example.com/article",
+            name="Visual archive",
+            output_dir="outputs",
+            output_format="html",
+            html_mode="snapshot",
+            embed_images=False,
+            whole_book=False,
+            playwright=True,
+            headed=False,
+            wait_for_user=False,
+        )
+
+        command = build_crawler_command(options, "python", "crawler.py")
+
+        self.assertEqual(command[command.index("--format") + 1], "html")
+        self.assertEqual(command[command.index("--html-mode") + 1], "snapshot")
+        self.assertIn("--no-embed-images", command)
+
     def test_rejects_invalid_url(self):
         with self.assertRaises(AppValidationError):
             ExtractionOptions("file:///notes", "Book", "outputs").validated()
@@ -134,6 +154,15 @@ class AppModelTests(unittest.TestCase):
                 url="dQw4w9WgXcQ",
                 name="course/lesson",
                 output_dir="outputs/youtube",
+            ).validated()
+
+    def test_youtube_rejects_html_output(self):
+        with self.assertRaises(AppValidationError):
+            YouTubeExtractionOptions(
+                url="dQw4w9WgXcQ",
+                name="Lesson",
+                output_dir="outputs/youtube",
+                output_format="html",
             ).validated()
 
 

@@ -59,6 +59,26 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertFalse(options.playwright)
         self.assertEqual(options.expected_outputs, 1)
 
+    def test_builds_html_options_from_frontend_payload(self):
+        options = DesktopBridge._options_from_payload(
+            {
+                "mode": "page",
+                "url": "https://example.com/article",
+                "name": "Visual archive",
+                "output_dir": "outputs/pages",
+                "output_format": "html",
+                "html_mode": "snapshot",
+                "embed_images": False,
+                "playwright": True,
+                "headed": False,
+                "wait_for_user": False,
+            }
+        )
+
+        self.assertEqual(options.output_format, "html")
+        self.assertEqual(options.html_mode, "snapshot")
+        self.assertFalse(options.embed_images)
+
     def test_status_returns_only_events_after_cursor(self):
         bridge = DesktopBridge()
         bridge._append_event("output", text="first")
@@ -69,6 +89,17 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(status["cursor"], 2)
         self.assertEqual(status["events"], [{"type": "saved", "path": "output.md"}])
         self.assertFalse(status["running"])
+
+    def test_bridge_does_not_expose_native_state_to_pywebview(self):
+        bridge = DesktopBridge()
+
+        public_data = [
+            name
+            for name in dir(bridge)
+            if not name.startswith("_") and not callable(getattr(bridge, name))
+        ]
+
+        self.assertEqual(public_data, [])
 
     def test_builds_youtube_options_from_frontend_payload(self):
         options = DesktopBridge._youtube_options_from_payload(

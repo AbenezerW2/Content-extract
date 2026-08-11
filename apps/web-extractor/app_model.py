@@ -5,7 +5,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-OUTPUT_FORMATS = ("markdown", "json", "text")
+WEB_OUTPUT_FORMATS = ("markdown", "json", "text", "html")
+TRANSCRIPT_OUTPUT_FORMATS = ("markdown", "json", "text")
+HTML_MODES = ("clean", "snapshot")
 DEFAULT_YOUTUBE_LANGUAGES = ("en", "en-US", "en-GB")
 
 
@@ -19,6 +21,8 @@ class ExtractionOptions:
     name: str
     output_dir: str
     output_format: str = "markdown"
+    html_mode: str = "clean"
+    embed_images: bool = True
     whole_book: bool = True
     start_chapter: int = 1
     end_chapter: int = 1
@@ -42,8 +46,10 @@ class ExtractionOptions:
             raise AppValidationError("Enter a book name or output name.")
         if not output_dir:
             raise AppValidationError("Choose an output folder.")
-        if self.output_format not in OUTPUT_FORMATS:
-            raise AppValidationError("Choose Markdown, JSON, or text output.")
+        if self.output_format not in WEB_OUTPUT_FORMATS:
+            raise AppValidationError("Choose Markdown, JSON, text, or HTML output.")
+        if self.html_mode not in HTML_MODES:
+            raise AppValidationError("Choose clean or snapshot HTML mode.")
         if self.delay < 0:
             raise AppValidationError("Delay cannot be negative.")
         if self.crawl_site and not 1 <= self.max_pages <= 30:
@@ -63,6 +69,8 @@ class ExtractionOptions:
             name=name,
             output_dir=output_dir,
             output_format=self.output_format,
+            html_mode=self.html_mode,
+            embed_images=self.embed_images,
             whole_book=self.whole_book,
             start_chapter=self.start_chapter,
             end_chapter=self.end_chapter,
@@ -111,7 +119,7 @@ class YouTubeExtractionOptions:
             raise AppValidationError("Choose an output folder.")
         if not languages:
             raise AppValidationError("Enter at least one preferred caption language.")
-        if self.output_format not in OUTPUT_FORMATS:
+        if self.output_format not in TRANSCRIPT_OUTPUT_FORMATS:
             raise AppValidationError("Choose Markdown, JSON, or text output.")
         if self.playlist and not 1 <= self.max_videos <= 30:
             raise AppValidationError("Playlist extraction must be limited to 1–30 videos.")
@@ -178,6 +186,10 @@ def build_crawler_command(
     )
     if options.overwrite:
         command.append("--overwrite")
+    if options.output_format == "html":
+        command.extend(["--html-mode", options.html_mode])
+        if not options.embed_images:
+            command.append("--no-embed-images")
     return command
 
 
