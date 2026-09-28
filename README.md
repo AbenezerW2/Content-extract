@@ -22,7 +22,7 @@ the combined workflows from one interface.
 - Reopen recent results from persistent, per-workflow history.
 - Experimental button-driven reader screenshots with page labels and a local gallery
   ([Kortext / paginated-reader capture](apps/web-extractor/kortext/readme.md));
-  command-line only, with live Kortext compatibility awaiting verification.
+  command-line only, with a successful three-page Kortext PDF reader trial.
 
 ## Repository layout
 

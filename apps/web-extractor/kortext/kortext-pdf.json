@@ -1,0 +1,6 @@
+{
+  "content_selector": "img.page",
+  "next_selector": "button[aria-label='Go to next page']",
+  "page_label_selector": "#currentPageOrLoc",
+  "loading_selector": "[role='progressbar']"
+}

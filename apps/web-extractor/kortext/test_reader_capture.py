@@ -69,6 +69,10 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(result["status"], "page_limit")
         self.assertEqual(self.page.locator("#label").input_value(), "iv")
 
+    def test_transparent_loading_indicator_is_not_busy(self):
+        self.page.locator("#loading").evaluate("el => {el.hidden=false; el.style.opacity='0';}")
+        self.assertEqual(self.run_capture(max_pages=1)["status"], "page_limit")
+
     def test_stale_canvas_does_not_get_new_label(self):
         self.page.locator("#next").evaluate("el => el.onclick = () => document.querySelector('#label').value = '1'")
         with self.assertRaises(CaptureError):

@@ -69,7 +69,12 @@ class Reader:
             locator.wait_for(state="visible", timeout=self.timeout * 1000)
 
     def is_loading(self):
-        return self.loading is not None and any(item.is_visible() for item in self.loading.all())
+        # Playwright considers opacity:0 elements visible. Kortext keeps its
+        # loading bar mounted and makes it transparent when loading completes.
+        return self.loading is not None and any(
+            item.is_visible() and item.evaluate("el => { for (let node = el; node; node = node.parentElement) { if (Number(getComputedStyle(node).opacity) === 0) return false; } return true; }")
+            for item in self.loading.all()
+        )
 
     def snapshot(self):
         if self.is_loading():

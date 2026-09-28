@@ -46,10 +46,11 @@ python -m playwright install chromium
 
 ## Configure the reader
 
-Kortext's authenticated reader controls have not yet been verified for this
-implementation. No guessed Kortext selectors are shipped as working defaults.
-Obtain the selectors from the actual open reader using browser developer tools
-or Playwright Inspector. Create a local JSON file with this structure:
+The supplied `kortext-pdf.json` configuration was verified against the live
+Kortext PDF reader on September 28, 2026. Use it for an initial short trial.
+Other reader versions and EPUB books may require different selectors. For
+those readers, obtain selectors from the actual open reader using browser
+developer tools or Playwright Inspector. A custom configuration looks like:
 
 ```json
 {
@@ -75,7 +76,8 @@ Nested iframe chains are not implemented.
 
 ```bash
 python apps/web-extractor/kortext/reader_capture.py "https://app.kortext.com" \
-  --config reader.json --output outputs/kortext-trial --max-pages 3
+  --config apps/web-extractor/kortext/kortext-pdf.json \
+  --output outputs/kortext-trial --max-pages 3
 ```
 
 Sign in manually in the new browser, open the book in that same tab, select
@@ -122,6 +124,15 @@ numeric labels, disabled/missing Next controls, stale artwork, navigation
 cycles, capture limits, iframes, ambiguous selectors, escaped labels, and output
 preservation. They use a controlled fixture, not a Kortext account.
 
-On September 28, 2026, the live Kortext entry point was opened and reached the
-sign-in screen. **Authenticated Kortext extraction remains unverified** until
-an accessible book and its actual reader selectors are available.
+On September 28, 2026, a live trial after manual sign-in successfully captured
+three consecutive PDF reader pages labelled 2, 3 and 4. All three screenshots
+were visually checked against their printed page numbers. The run stopped at
+the requested three-page limit. Kortext's loading bar remains mounted with
+opacity zero when idle; the loading check now accounts for transparent elements
+and ancestors, with a regression test covering this behavior.
+
+The URL advanced from `/reader/pdf/5626/2` to `/reader/pdf/5626/4` during the
+trial. Navigation in this implementation still clicks Next; numbered-URL
+navigation has not been implemented. Whole-book completion, other titles,
+EPUB readers, and expired-session recovery have not been verified live.
+Captured book pages and login state are not included in this repository.
