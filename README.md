@@ -20,6 +20,9 @@ the combined workflows from one interface.
 - Export clean portable HTML or a full-page visual snapshot from the repository CLI.
 - Override automatically detected filenames when needed.
 - Reopen recent results from persistent, per-workflow history.
+- Experimental button-driven reader screenshots with page labels and a local gallery
+  ([Kortext / paginated-reader capture](apps/web-extractor/kortext/readme.md));
+  command-line only, with live Kortext compatibility awaiting verification.
 
 ## Repository layout
 
