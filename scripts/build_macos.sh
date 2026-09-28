@@ -47,6 +47,20 @@ echo "Adding the bundled Chromium runtime..."
 ditto "$BROWSER_DIR" "$RESOURCE_DIR/ms-playwright"
 
 echo "Applying a local ad-hoc signature..."
+CONTENT_EXTRACT_BUILD_REVISION="$(git -C "$PROJECT_DIR" rev-parse HEAD)" \
+  "$BUILD_VENV/bin/python" - "$APP_PATH/Contents/Info.plist" <<'PY'
+import os
+import plistlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open("rb") as stream:
+    info = plistlib.load(stream)
+info["ContentExtractRevision"] = os.environ["CONTENT_EXTRACT_BUILD_REVISION"]
+with path.open("wb") as stream:
+    plistlib.dump(info, stream)
+PY
 codesign --force --deep --sign - "$APP_PATH"
 
 echo

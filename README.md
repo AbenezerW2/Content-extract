@@ -96,6 +96,10 @@ python app.py --dev
 
 ## Build the installable macOS app
 
+For repeatable one-click updates from a chosen GitHub branch, see
+[Mac updater setup](scripts/UPDATING_MAC.md). It builds before replacing the
+installed app and keeps a backup for rollback.
+
 The repository now includes a production packaging pipeline. It compiles the
 React interface, bundles the Python extraction engine and Chromium, creates a
 native application icon, and produces a standalone `Content Extract.app`.
