@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import re
+from datetime import datetime
+from urllib.parse import urlsplit
 import runpy
 import subprocess
 import sys
@@ -23,6 +27,7 @@ from history_store import HistoryStore
 
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = Path(os.environ.get("CONTENT_EXTRACT_ROOT", APP_DIR)).resolve()
+KORTEXT_PATH = APP_DIR / "kortext" / "reader_capture.py"
 CRAWLER_PATH = APP_DIR / "crawler.py"
 YOUTUBE_EXTRACTOR_PATH = APP_DIR.parent / "youtube-extractor" / "youtube_transcript_extractor.py"
 FRONTEND_INDEX = APP_DIR / "frontend" / "dist" / "index.html"
@@ -91,7 +96,10 @@ class DesktopBridge:
 
         mode = str(payload.get("mode", "page"))
         try:
-            if mode == "youtube":
+            if mode == "kortext":
+                command = self._kortext_command(payload)
+                command = extractor_command(command, "kortext")
+            elif mode == "youtube":
                 options = self._youtube_options_from_payload(payload)
                 command = build_youtube_command(options, sys.executable, YOUTUBE_EXTRACTOR_PATH)
                 command = extractor_command(command, "youtube")
@@ -142,6 +150,8 @@ class DesktopBridge:
         try:
             for line in iter(process.stdout.readline, ""):
                 self._append_event("output", text=line)
+                if line.startswith("Saved capture "):
+                    self._append_event("captured")
                 lowered = line.lower()
                 if lowered.startswith("saved:"):
                     path = line.split(":", 1)[1].strip()
@@ -151,7 +161,7 @@ class DesktopBridge:
                     path = line.split("'", 2)[1]
                     self._append_event("saved", path=path)
                     self._history.record(path=path, **job)
-                if "complete any verification" in lowered:
+                if "complete any verification" in lowered or lowered.startswith("reader ready:"):
                     self._append_event("verification")
         finally:
             exit_code = process.wait()
@@ -279,6 +289,22 @@ class DesktopBridge:
         ).validated()
 
     @staticmethod
+    def _kortext_command(payload: dict[str, Any]) -> list[str]:
+        url = str(payload.get("url", "")).strip()
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Enter a complete HTTP(S) reader URL without embedded credentials.")
+        limit = int(payload.get("max_pages", 3))
+        if limit < 0:
+            raise ValueError("Page limit must be zero (all pages) or a positive whole number.")
+        name = re.sub(r"[^\w .-]+", "-", str(payload.get("name", "")).strip()).strip(" .")[:80] or "Kortext"
+        parent = DesktopBridge._resolve_output_dir(str(payload.get("output_dir", "")))
+        destination = parent / f"{name}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+        return [sys.executable, str(KORTEXT_PATH), url, "--config",
+                str(KORTEXT_PATH.with_name("kortext-pdf.json")), "--output", str(destination),
+                "--max-pages", str(limit)]
+
+    @staticmethod
     def _youtube_options_from_payload(payload: dict[str, Any]) -> YouTubeExtractionOptions:
         languages = tuple(
             language.strip()
@@ -311,7 +337,7 @@ def parse_args() -> argparse.Namespace:
 
 def run_worker(worker: str, worker_args: list[str]) -> int:
     """Run a CLI extractor from the frozen desktop executable."""
-    script = CRAWLER_PATH if worker == "web" else YOUTUBE_EXTRACTOR_PATH
+    script = {"web": CRAWLER_PATH, "youtube": YOUTUBE_EXTRACTOR_PATH, "kortext": KORTEXT_PATH}[worker]
     sys.argv = [str(script), *worker_args]
     try:
         runpy.run_path(str(script), run_name="__main__")
@@ -323,7 +349,7 @@ def run_worker(worker: str, worker_args: list[str]) -> int:
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--worker":
         worker = sys.argv[2]
-        if worker not in {"web", "youtube"}:
+        if worker not in {"web", "youtube", "kortext"}:
             print(f"Unknown extraction worker: {worker}", file=sys.stderr)
             return 2
         return run_worker(worker, sys.argv[3:])
@@ -339,7 +365,8 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        frontend_url = str(FRONTEND_INDEX)
+        frontend_version = hashlib.sha256(FRONTEND_INDEX.read_bytes()).hexdigest()[:16]
+        frontend_url = f"{FRONTEND_INDEX}?v={frontend_version}"
 
     bridge = DesktopBridge()
     window = webview.create_window(

@@ -2,8 +2,11 @@
 
 This adds a standalone command-line capture workflow for readers whose Next
 button changes the displayed page without changing the URL. It uses the same
-Playwright dependency as the existing web extractor. It is not yet exposed in
-the desktop interface.
+Playwright dependency as the existing web extractor. The desktop interface includes a dedicated Kortext tab. Open the
+browser, sign in and select a PDF book in single-page / fit-page view,
+then return to the app and select Start capture. The tab defaults to a
+three-page trial; set the page limit to 0 to continue to the last page.
+Each run creates a fresh subfolder with PNGs, a manifest and an HTML gallery.
 
 ## Branch base and missing v2
 

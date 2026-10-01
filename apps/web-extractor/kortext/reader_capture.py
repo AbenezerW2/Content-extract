@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import signal
 import time
 from urllib.parse import urlsplit
 
@@ -196,6 +197,9 @@ def main(argv=None):
     parser.add_argument("--timeout", type=float, default=30, help="Seconds allowed for each page to settle")
     parser.add_argument("--settle", type=float, default=1.0, help="Seconds that label and screenshot must remain stable")
     args = parser.parse_args(argv)
+    def cancel_capture(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, cancel_capture)
     url = urlsplit(args.url)
     if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password:
         parser.error("Provide an HTTP(S) URL without embedded credentials.")
@@ -218,8 +222,13 @@ def main(argv=None):
             try:
                 page = context.new_page()
                 page.goto(args.url, wait_until="domcontentloaded", timeout=args.timeout * 1000)
-                input("Sign in in the browser, open the reader in this tab, choose single-page / fit-page view and the starting page. Press Enter here when ready: ")
-                result = capture(Reader(page, config, args.timeout), args.output, max_pages=args.max_pages, settle=args.settle)
+                print("Reader ready: Sign in, open the book in this browser tab, select single-page / fit-page view and your starting page, then choose Start capture in the app (or press Enter here).", flush=True)
+                input()
+                try:
+                    result = capture(Reader(page, config, args.timeout), args.output, max_pages=args.max_pages, settle=args.settle)
+                finally:
+                    if (args.output / "index.html").exists():
+                        print(f"Saved: {args.output / 'index.html'}", flush=True)
                 print(f'{result["status"]}: {len(result["pages"])} pages saved to {args.output}')
             finally:
                 context.close()

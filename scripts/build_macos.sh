@@ -45,6 +45,10 @@ RESOURCE_DIR="${FRONTEND_FILE%/apps/web-extractor/frontend/dist/index.html}"
 
 echo "Adding the bundled Chromium runtime..."
 ditto "$BROWSER_DIR" "$RESOURCE_DIR/ms-playwright"
+# Frozen Python resolves its root under Frameworks; keep the browser resource reachable there.
+if [[ ! -e "$APP_PATH/Contents/Frameworks/ms-playwright" ]]; then
+  ln -s ../Resources/ms-playwright "$APP_PATH/Contents/Frameworks/ms-playwright"
+fi
 
 echo "Applying a local ad-hoc signature..."
 CONTENT_EXTRACT_BUILD_REVISION="$(git -C "$PROJECT_DIR" rev-parse HEAD)" \

@@ -38,8 +38,8 @@ import {
 } from "@/components/ui/morphing-dialog"
 import { cn } from "@/lib/utils"
 
-type Mode = "page" | "site" | "book" | "youtube"
-type Workflow = "web" | "book" | "youtube"
+type Mode = "page" | "site" | "book" | "youtube" | "kortext"
+type Workflow = "web" | "book" | "youtube" | "kortext"
 type Theme = "light" | "dark" | "black" | "system"
 
 const MAX_ACTIVITY_CHARS = 200_000
@@ -79,7 +79,7 @@ type HistoryEntry = {
 }
 
 type BridgeEvent = {
-  type: "output" | "saved" | "verification" | "finished" | "error"
+  type: "output" | "saved" | "verification" | "captured" | "finished" | "error"
   text?: string
   path?: string
   exitCode?: number
@@ -135,6 +135,7 @@ const initialForm: ExtractionForm = {
 const spring = { type: "spring" as const, stiffness: 420, damping: 34 }
 
 const modeDetails: Record<Mode, { title: string; description: string; unit: string }> = {
+  kortext: { title: "Kortext reader capture", description: "Sign in, open a PDF book, then capture pages from your current position.", unit: "pages" },
   page: { title: "Web-page extraction", description: "Capture one public page and name it from the page title by default.", unit: "page" },
   site: { title: "Whole-site extraction", description: "Follow same-site links and save up to 30 public pages.", unit: "pages" },
   book: { title: "Book extraction", description: "Extract one chapter or a numbered chapter range in one browser session.", unit: "chapters" },
@@ -168,13 +169,14 @@ function App() {
 
   const expectedOutputs = form.mode === "book"
     ? Math.max(1, form.endChapter - form.startChapter + 1)
-    : form.mode === "site"
+    : form.mode === "site" || form.mode === "kortext"
       ? form.maxPages
       : form.mode === "youtube" && form.playlist
         ? form.maxVideos
         : 1
   const safeExpectedOutputs = Math.max(1, Number(expectedOutputs) || 1)
-  const progress = running || savedCount ? Math.min(100, Math.round((savedCount / safeExpectedOutputs) * 100)) : 0
+  const unlimitedCapture = form.mode === "kortext" && Number(form.maxPages) === 0
+  const progress = unlimitedCapture ? (running ? 30 : savedCount ? 100 : 0) : running || savedCount ? Math.min(100, Math.round((savedCount / safeExpectedOutputs) * 100)) : 0
 
   const refreshHistory = useCallback(async () => {
     if (!window.pywebview?.api) {
@@ -201,13 +203,13 @@ function App() {
     }
 
     for (const event of events) {
-      if (event.type === "saved") {
+      if (event.type === "captured" || (event.type === "saved" && form.mode !== "kortext")) {
         setSavedCount((count) => count + 1)
         setStatus(form.mode === "book" ? "Extracting chapters" : form.mode === "site" ? "Crawling site pages" : form.mode === "youtube" ? "Saving transcript" : "Saving page")
       }
       if (event.type === "verification") {
         setVerificationNeeded(true)
-        setStatus("Waiting for browser verification")
+        setStatus(form.mode === "kortext" ? "Open your book, then start capture" : "Waiting for browser verification")
       }
       if (event.type === "finished") {
         setRunning(false)
@@ -284,10 +286,12 @@ function App() {
   }
 
   function setMode(mode: Mode) {
+    if (running) return
     setForm((current) => ({
       ...current,
       mode,
-      url: (current.mode === "page" || current.mode === "site") && (mode === "page" || mode === "site") ? current.url : "",
+      maxPages: mode === "kortext" ? 3 : 30,
+      url: mode === "kortext" ? "https://app.kortext.com" : (current.mode === "page" || current.mode === "site") && (mode === "page" || mode === "site") ? current.url : "",
       name: (current.mode === "page" || current.mode === "site") && (mode === "page" || mode === "site") ? current.name : "",
       outputDir: "~/Documents/Extracted",
       format: mode === "youtube" ? "text" : current.format,
@@ -347,6 +351,7 @@ function App() {
     if (form.mode === "book" && (form.startChapter < 1 || form.endChapter < form.startChapter)) {
       return "The ending chapter must be at or after the starting chapter."
     }
+    if (form.mode === "kortext" && (form.maxPages === "" || !Number.isInteger(Number(form.maxPages)) || Number(form.maxPages) < 0)) return "Enter a whole number of pages, or 0 for all pages."
     const maxPages = Number(form.maxPages)
     const maxVideos = Number(form.maxVideos)
     if (form.mode === "site" && (maxPages < 1 || maxPages > 30)) return "Choose a whole-site limit between 1 and 30 pages."
@@ -397,7 +402,7 @@ function App() {
       return
     }
     setRunning(true)
-    setStatus(form.mode === "youtube" ? (form.playlist ? "Reading playlist" : "Fetching captions") : form.mode === "site" ? "Crawling site" : form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
+    setStatus(form.mode === "kortext" ? "Opening Kortext browser" : form.mode === "youtube" ? (form.playlist ? "Reading playlist" : "Fetching captions") : form.mode === "site" ? "Crawling site" : form.playwright || form.mode === "book" ? "Launching browser" : "Fetching page")
   }
 
   async function chooseOutput() {
@@ -410,15 +415,14 @@ function App() {
     const result = await window.pywebview?.api.send_verification()
     if (result?.ok) {
       setVerificationNeeded(false)
-      setStatus("Verification confirmed")
+      setStatus(form.mode === "kortext" ? "Capturing reader pages" : "Verification confirmed")
     }
   }
 
   async function stopExtraction() {
     await window.pywebview?.api.stop_extraction()
-    setRunning(false)
     setVerificationNeeded(false)
-    setStatus("Extraction stopped")
+    setStatus("Stopping extraction…")
   }
 
   async function openOutput() {
@@ -512,19 +516,19 @@ function App() {
               </p>
             </div>
             <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-300">
-              Up to {safeExpectedOutputs} {safeExpectedOutputs === 1 ? modeDetail.unit.replace(/s$/, "") : modeDetail.unit}
+              {form.mode === "kortext" && Number(form.maxPages) === 0 ? "Until the last page" : `Up to ${safeExpectedOutputs} ${safeExpectedOutputs === 1 ? modeDetail.unit.replace(/s$/, "") : modeDetail.unit}`}
             </span>
           </div>
 
-          <WorkflowVariantTabs
+          {form.mode !== "kortext" && <WorkflowVariantTabs
             form={form}
             onWebChange={setMode}
             onBookChange={setBookMultiple}
             onYouTubeChange={(playlist) => updateForm("playlist", playlist)}
-          />
+          />}
 
           <div className="grid min-w-0 grid-cols-1 gap-5 md:grid-cols-2">
-            <Field label={form.mode === "book" ? "Book URL" : form.mode === "youtube" ? (form.playlist ? "YouTube playlist URL" : "YouTube URL or video ID") : form.mode === "site" ? "Starting site URL" : "Page URL"} className="md:col-span-2">
+            <Field label={form.mode === "kortext" ? "Kortext reader or sign-in URL" : form.mode === "book" ? "Book URL" : form.mode === "youtube" ? (form.playlist ? "YouTube playlist URL" : "YouTube URL or video ID") : form.mode === "site" ? "Starting site URL" : "Page URL"} className="md:col-span-2">
               <div className="relative">
                 <Globe2 className="pointer-events-none absolute top-1/2 left-4 -translate-y-1/2 text-slate-400" size={17} />
                 <input
@@ -537,12 +541,12 @@ function App() {
               </div>
             </Field>
 
-            <Field label={form.mode === "book" ? "Book name" : form.mode === "youtube" ? "Custom filename (optional)" : form.mode === "site" ? "Filename prefix (optional)" : "Custom filename (optional)"}>
+            <Field label={form.mode === "kortext" ? "Book name (optional)" : form.mode === "book" ? "Book name" : form.mode === "youtube" ? "Custom filename (optional)" : form.mode === "site" ? "Filename prefix (optional)" : "Custom filename (optional)"}>
               <input
                 className="control"
                 value={form.name}
                 onChange={(event) => updateForm("name", event.target.value)}
-                placeholder={form.mode === "book" ? "Book Name" : form.mode === "youtube" ? "Leave blank to use video titles" : form.mode === "site" ? "Leave blank to use page titles" : "Leave blank to use the page title"}
+                placeholder={form.mode === "kortext" ? "e.g. Sociology" : form.mode === "book" ? "Book Name" : form.mode === "youtube" ? "Leave blank to use video titles" : form.mode === "site" ? "Leave blank to use page titles" : "Leave blank to use the page title"}
               />
             </Field>
 
@@ -597,16 +601,23 @@ function App() {
               </Field>
             )}
 
-            <Field label="Output format">
+            {form.mode === "kortext" && <>
+              <Field label="Page limit (0 = all pages)">
+                <input className="control" type="number" min={0} step={1} value={form.maxPages} onChange={(event) => updateForm("maxPages", event.target.value === "" ? "" : Number(event.target.value))} />
+              </Field>
+              <Field label="Output format"><div className="control">PNG pages + HTML gallery</div></Field>
+              <p className="text-sm leading-6 text-slate-500 md:col-span-2 dark:text-slate-400">Open the browser below, sign in, and open your PDF book in the same tab. Choose single-page / fit-page view and your starting page, then return here and choose Start capture. Each run creates a new folder. Try 3 pages first; 0 continues to the last page.</p>
+            </>}
+            {form.mode !== "kortext" && <Field label="Output format">
               <select className="control appearance-none" value={form.format} onChange={(event) => updateForm("format", event.target.value as OutputFormat)}>
                 <option value="markdown">Markdown (.md)</option>
                 <option value="json">JSON (.json)</option>
                 <option value="text">Plain text (.txt)</option>
                 {form.mode !== "youtube" && <option value="html">Web page (.html)</option>}
               </select>
-            </Field>
+            </Field>}
 
-            {form.mode !== "youtube" && form.format === "html" && (
+            {form.mode !== "kortext" && form.mode !== "youtube" && form.format === "html" && (
               <>
                 <Field label="HTML capture">
                   <select className="control appearance-none" value={form.htmlMode} onChange={(event) => updateForm("htmlMode", event.target.value as HtmlMode)}>
@@ -631,7 +642,7 @@ function App() {
                   <input className="control" value={form.translateTo} onChange={(event) => updateForm("translateTo", event.target.value)} placeholder="en" />
                 </Field>
               </>
-            ) : (
+            ) : form.mode !== "kortext" && (
               <Field label={form.mode === "book" ? "Delay between chapters" : form.mode === "site" ? "Delay between pages" : "Delay before fetching"}>
                 <div className="relative">
                   <input className="control pr-20" type="number" min={0} step={0.5} value={form.delay} onChange={(event) => updateForm("delay", Number(event.target.value))} />
@@ -641,7 +652,7 @@ function App() {
             )}
           </div>
 
-          <div className="mt-7 border-t border-slate-200 pt-6 dark:border-white/10">
+          {form.mode !== "kortext" && <div className="mt-7 border-t border-slate-200 pt-6 dark:border-white/10">
             <p className="field-label">{form.mode === "youtube" ? "Transcript options" : "Browser options"}</p>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {form.mode === "youtube" ? (
@@ -658,7 +669,7 @@ function App() {
               )}
               <Toggle label="Overwrite files" checked={form.overwrite} onChange={(checked) => updateForm("overwrite", checked)} />
             </div>
-          </div>
+          </div>}
 
           <AnimatePresence>
             {error && (
@@ -672,7 +683,7 @@ function App() {
 
           <div className="mt-7 flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
             <div className="flex flex-wrap gap-2">
-              <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={safeExpectedOutputs} />
+              <ActivityDialog logs={logs} status={status} savedCount={savedCount} expectedOutputs={unlimitedCapture ? 0 : safeExpectedOutputs} />
               <HistoryDialog entries={history} mode={form.mode} onRefresh={refreshHistory} />
             </div>
             <div className="flex flex-wrap gap-2 sm:justify-end">
@@ -685,7 +696,7 @@ function App() {
                 </motion.button>
               ) : (
                 <motion.button whileHover={{ y: -2 }} whileTap={{ scale: 0.97 }} onClick={startExtraction} className="inline-flex h-11 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white shadow-lg shadow-blue-600/25">
-                  <Play size={17} fill="currentColor" /> Start extraction
+                  <Play size={17} fill="currentColor" /> {form.mode === "kortext" ? "Open Kortext browser" : "Start extraction"}
                 </motion.button>
               )}
             </div>
@@ -705,7 +716,7 @@ function App() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <p className="truncate text-sm font-extrabold">{status}</p>
-                    <p className="shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">{savedCount} / {safeExpectedOutputs}</p>
+                    <p className="shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">{form.mode === "kortext" ? `${savedCount} pages saved` : `${savedCount} / ${safeExpectedOutputs}`}</p>
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10">
                     <motion.div className="h-full rounded-full bg-blue-600" animate={{ width: `${progress}%` }} transition={spring} />
@@ -713,7 +724,7 @@ function App() {
                 </div>
                 {verificationNeeded && (
                   <motion.button initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} whileTap={{ scale: 0.97 }} onClick={confirmVerification} className="shrink-0 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white">
-                    Verification complete
+                    {form.mode === "kortext" ? "Start capture" : "Verification complete"}
                   </motion.button>
                 )}
                 </div>
@@ -733,6 +744,7 @@ function App() {
 
 function ModePicker({ mode, onChange }: { mode: Mode; onChange: (workflow: Workflow) => void }) {
   const options = [
+    { id: "kortext" as const, title: "Kortext", description: "Capture pages from your PDF reader.", visual: <FileText className="size-10 text-blue-600" /> },
     {
       id: "web" as const,
       title: "Web",
@@ -753,7 +765,7 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (workflow: Workf
     },
   ]
   return (
-    <div className="grid gap-3 md:grid-cols-3">
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       {options.map((option) => {
         const selected = option.id === "web" ? mode === "page" || mode === "site" : mode === option.id
         return (
@@ -901,7 +913,7 @@ function ActivityDialog({ logs, status, savedCount, expectedOutputs }: { logs: s
     <MorphingDialog transition={{ type: "spring", bounce: 0.04, duration: 0.42 }}>
       <MorphingDialogTrigger className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-left dark:border-white/10 dark:bg-white/[0.035]">
         <ScrollText size={17} className="text-blue-600 dark:text-blue-400" />
-        <span><span className="block text-xs font-extrabold">Activity</span><span className="block text-[0.68rem] text-slate-500 dark:text-slate-400">{savedCount} of {expectedOutputs} saved</span></span>
+        <span><span className="block text-xs font-extrabold">Activity</span><span className="block text-[0.68rem] text-slate-500 dark:text-slate-400">{expectedOutputs ? `${savedCount} of ${expectedOutputs} saved` : `${savedCount} pages saved`}</span></span>
       </MorphingDialogTrigger>
       <MorphingDialogContainer>
         <MorphingDialogContent className="relative max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#0d1420] sm:p-7">

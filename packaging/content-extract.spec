@@ -5,6 +5,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 ROOT = Path(SPECPATH).parent
 FRONTEND = ROOT / "apps" / "web-extractor" / "frontend" / "dist"
 datas = [
+    (str(ROOT / "apps/web-extractor/kortext/reader_capture.py"), "apps/web-extractor/kortext"),
+    (str(ROOT / "apps/web-extractor/kortext/kortext-pdf.json"), "apps/web-extractor/kortext"),
     (str(FRONTEND), "apps/web-extractor/frontend/dist"),
     (str(ROOT / "apps" / "web-extractor" / "app.py"), "apps/web-extractor"),
     (str(ROOT / "apps" / "web-extractor" / "crawler.py"), "apps/web-extractor"),
@@ -71,8 +73,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleDisplayName": "Content Extract",
         "CFBundleName": "Content Extract",
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "2.2.0",
+        "CFBundleVersion": "220",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "Copyright © 2026 Content Extract",
